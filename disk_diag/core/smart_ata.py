@@ -6,9 +6,11 @@ import struct
 
 from .constants import (
     SMART_RCV_DRIVE_DATA,
+    SMART_SEND_DRIVE_COMMAND,
     ATA_SMART_CMD,
     SMART_READ_ATTRIBUTES,
     SMART_READ_THRESHOLDS,
+    SMART_ENABLE_OPERATIONS,
     SMART_CYL_LOW, SMART_CYL_HI,
 )
 from .structures import SENDCMDINPARAMS, SENDCMDOUTPARAMS, IDEREGS
@@ -26,21 +28,40 @@ _MAX_ATTRIBUTES = 30
 _ATTR_DATA_OFFSET = 2
 
 
-def _build_smart_command(feature: int, drive_number: int) -> SENDCMDINPARAMS:
-    """Построить SENDCMDINPARAMS для SMART-команды."""
+def _build_smart_command(feature: int, buffer_size: int = 512) -> SENDCMDINPARAMS:
+    """Построить SENDCMDINPARAMS для SMART-команды.
+
+    bDriveNumber всегда 0: для SATA каждый диск открывается через свой
+    PhysicalDriveN handle, выбор устройства — по handle, а не по номеру.
+    Поле bDriveNumber — легаси от IDE master/slave, на SATA игнорируется.
+    """
     params = SENDCMDINPARAMS()
-    params.cBufferSize = 512
-    params.bDriveNumber = drive_number
+    params.cBufferSize = buffer_size
+    params.bDriveNumber = 0  # Всегда 0 — устройство выбрано через handle
 
     params.irDriveRegs.bFeaturesReg = feature
     params.irDriveRegs.bSectorCountReg = 1
     params.irDriveRegs.bSectorNumberReg = 1
     params.irDriveRegs.bCylLowReg = SMART_CYL_LOW
     params.irDriveRegs.bCylHighReg = SMART_CYL_HI
-    params.irDriveRegs.bDriveHeadReg = 0xA0  # Master drive
+    params.irDriveRegs.bDriveHeadReg = 0xA0  # Master (единственный вариант для SATA)
     params.irDriveRegs.bCommandReg = ATA_SMART_CMD
 
     return params
+
+
+def _enable_smart(handle: DeviceHandle):
+    """Отправить SMART ENABLE OPERATIONS перед чтением данных.
+
+    Некоторые диски (WD, Seagate) требуют явного включения SMART.
+    Если SMART уже включён — команда просто игнорируется.
+    """
+    cmd = _build_smart_command(SMART_ENABLE_OPERATIONS, buffer_size=0)
+    try:
+        handle.ioctl(SMART_SEND_DRIVE_COMMAND, cmd, ctypes.sizeof(SENDCMDOUTPARAMS))
+        logger.debug("SMART ENABLE sent successfully")
+    except IoctlFailed as e:
+        logger.debug(f"SMART ENABLE failed (may already be enabled): {e}")
 
 
 def _parse_raw_attributes(data: bytes) -> list[dict]:
@@ -119,15 +140,18 @@ def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[S
 
     Args:
         handle: Открытый DeviceHandle
-        drive_number: Номер диска (для SENDCMDINPARAMS.bDriveNumber)
+        drive_number: Номер диска (для логирования, bDriveNumber всегда 0)
 
     Returns:
         Список SmartAttribute с заполненными полями
     """
     out_size = ctypes.sizeof(SENDCMDOUTPARAMS)
 
+    # 0. Включаем SMART (некоторые диски требуют явного enable)
+    _enable_smart(handle)
+
     # 1. Читаем атрибуты
-    cmd_attrs = _build_smart_command(SMART_READ_ATTRIBUTES, drive_number)
+    cmd_attrs = _build_smart_command(SMART_READ_ATTRIBUTES)
     try:
         data_attrs = handle.ioctl(SMART_RCV_DRIVE_DATA, cmd_attrs, out_size)
     except IoctlFailed as e:
@@ -146,7 +170,7 @@ def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[S
     raw_attrs = _parse_raw_attributes(attr_buffer)
 
     # 2. Читаем пороги
-    cmd_thresh = _build_smart_command(SMART_READ_THRESHOLDS, drive_number)
+    cmd_thresh = _build_smart_command(SMART_READ_THRESHOLDS)
     thresholds = {}
     try:
         data_thresh = handle.ioctl(SMART_RCV_DRIVE_DATA, cmd_thresh, out_size)

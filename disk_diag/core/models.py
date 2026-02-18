@@ -90,3 +90,22 @@ class HealthStatus:
     summary: str
     warnings: list[str] = field(default_factory=list)
     critical_issues: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BenchmarkResult:
+    """Результаты бенчмарка."""
+    # Sequential read
+    sequential_speed_mbps: float = 0.0
+    sequential_bytes_read: int = 0
+    sequential_time_sec: float = 0.0
+
+    # Random 4K read
+    random_iops: float = 0.0
+    random_avg_latency_us: float = 0.0
+    random_min_latency_us: float = 0.0
+    random_max_latency_us: float = 0.0
+    random_reads_count: int = 0
+
+    # Scatter plot data: (offset_gb, latency_us)
+    latency_points: list[tuple[float, float]] = field(default_factory=list)

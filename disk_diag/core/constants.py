@@ -94,5 +94,26 @@ BusTypeUsb = 0x07
 BusTypeSata = 0x0B
 BusTypeNvme = 0x11
 
+# Получить размер диска напрямую (надёжнее GEOMETRY_EX)
+# CTL_CODE(FILE_DEVICE_DISK=0x07, 0x0017, METHOD_BUFFERED, FILE_READ_ACCESS=1)
+IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
+
+# Storage-level read capacity (идёт через storage stack, работает даже
+# когда disk-level IOCTL падают с error 1117)
+# CTL_CODE(FILE_DEVICE_MASS_STORAGE=0x2D, 0x0450, METHOD_BUFFERED, FILE_READ_ACCESS=1)
+IOCTL_STORAGE_READ_CAPACITY = 0x002D5140
+
 # Максимальное количество физических дисков для сканирования
 MAX_PHYSICAL_DRIVES = 16
+
+# --- Benchmark / Direct I/O ---
+FILE_FLAG_NO_BUFFERING = 0x20000000
+
+# SetFilePointerEx move method
+FILE_BEGIN = 0
+
+# VirtualAlloc / VirtualFree
+MEM_COMMIT = 0x1000
+MEM_RESERVE = 0x2000
+MEM_RELEASE = 0x8000
+PAGE_READWRITE = 0x04

@@ -4,7 +4,7 @@ import logging
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QStatusBar, QMenuBar, QMessageBox, QLabel,
+    QSplitter, QStatusBar, QMenuBar, QMessageBox, QLabel, QTabWidget,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 
@@ -19,6 +19,7 @@ from .drive_selector import DriveSelector
 from .info_panel import InfoPanel
 from .smart_table import SmartTableWidget
 from .health_indicator import HealthIndicator
+from .benchmark_panel import BenchmarkPanel
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +110,38 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self._health_indicator, stretch=1)
         main_layout.addLayout(top_layout)
 
-        # Таблица SMART
+        # Вкладки: SMART + Benchmark
+        self._tabs = QTabWidget()
+
+        # SMART tab: таблица + панель описания
+        smart_tab = QWidget()
+        smart_layout = QVBoxLayout(smart_tab)
+        smart_layout.setContentsMargins(0, 0, 0, 0)
+        smart_layout.setSpacing(4)
+
         self._smart_table = SmartTableWidget()
-        main_layout.addWidget(self._smart_table, stretch=1)
+        self._attr_desc = QLabel("Select an attribute to see its description")
+        self._attr_desc.setWordWrap(True)
+        self._attr_desc.setMinimumHeight(50)
+        self._attr_desc.setTextFormat(Qt.TextFormat.RichText)
+        self._attr_desc.setStyleSheet(
+            "QLabel {"
+            "  background-color: #313244;"
+            "  color: #cdd6f4;"
+            "  padding: 6px 12px;"
+            "  border-radius: 6px;"
+            "  font-size: 12px;"
+            "}"
+        )
+        self._smart_table.description_changed.connect(self._on_attr_description)
+
+        smart_layout.addWidget(self._smart_table, stretch=1)
+        smart_layout.addWidget(self._attr_desc)
+
+        self._benchmark_panel = BenchmarkPanel()
+        self._tabs.addTab(smart_tab, "SMART")
+        self._tabs.addTab(self._benchmark_panel, "Benchmark")
+        main_layout.addWidget(self._tabs, stretch=1)
 
     def _setup_statusbar(self):
         self._statusbar = QStatusBar()
@@ -137,6 +167,7 @@ class MainWindow(QMainWindow):
         self._info_panel.clear()
         self._health_indicator.clear()
         self._smart_table.show_message("Scanning...")
+        self._benchmark_panel.clear()
 
         try:
             self._drives = enumerate_drives()
@@ -161,6 +192,7 @@ class MainWindow(QMainWindow):
         self._info_panel.set_drive_info(drive)
         self._health_indicator.clear()
         self._smart_table.show_message("Reading SMART data...")
+        self._benchmark_panel.set_drive(drive.drive_number, drive.capacity_bytes)
         self._statusbar.showMessage(f"Reading SMART data for {drive.model.strip()}...", 10000)
 
         # Запуск чтения SMART в фоновом потоке
@@ -226,9 +258,28 @@ class MainWindow(QMainWindow):
             self._smart_table.show_message("SMART not supported for this drive")
             self._statusbar.showMessage("SMART not available", 3000)
 
+    def _on_attr_description(self, html: str):
+        """Обновить панель описания атрибута."""
+        if html:
+            self._attr_desc.setText(html)
+        else:
+            self._attr_desc.setText(
+                '<span style="color: #585b70;">Select an attribute to see its description</span>'
+            )
+
     def _on_smart_error(self, error_msg: str):
         """Обработчик ошибки чтения SMART."""
-        self._smart_table.show_message(f"Error: {error_msg}")
+        # Более понятное сообщение для частых ошибок
+        if "1117" in error_msg:
+            display_msg = (
+                "I/O Device Error (1117)\n\n"
+                "Drive not responding to SMART commands.\n"
+                "Check SATA cable, power connection,\n"
+                "or try reconnecting the drive."
+            )
+        else:
+            display_msg = f"Error: {error_msg}"
+        self._smart_table.show_message(display_msg)
         self._health_indicator.clear()
         self._statusbar.showMessage(f"SMART error: {error_msg}", 5000)
         logger.error(f"SMART read error: {error_msg}")
@@ -245,6 +296,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Корректное завершение при закрытии окна."""
+        self._benchmark_panel.stop()
         if self._worker_thread is not None and self._worker_thread.isRunning():
             self._worker_thread.quit()
             self._worker_thread.wait(2000)

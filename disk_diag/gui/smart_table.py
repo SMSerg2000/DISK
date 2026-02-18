@@ -1,12 +1,13 @@
 """Таблица SMART-атрибутов с цветовой кодировкой."""
 
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush
 
 from ..core.models import SmartAttribute, NvmeHealthInfo, HealthLevel, HealthStatus
 from ..utils.formatting import format_capacity, format_hours, format_smart_raw
 from ..data.nvme_fields import NVME_HEALTH_FIELDS
+from ..data.smart_db import get_attribute_info
 
 # Цвета строк по уровню здоровья
 _ROW_COLORS = {
@@ -27,6 +28,8 @@ _STATUS_TEXT_COLORS = {
 class SmartTableWidget(QTableWidget):
     """Таблица SMART-атрибутов для ATA-дисков и NVMe health info."""
 
+    description_changed = Signal(str)  # HTML-описание выбранного атрибута
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -36,6 +39,18 @@ class SmartTableWidget(QTableWidget):
         self.setSortingEnabled(True)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
+
+        self.currentCellChanged.connect(self._on_cell_changed)
+
+    def _on_cell_changed(self, row, col, prev_row, prev_col):
+        """При смене выделенной строки — показать описание атрибута."""
+        item = self.item(row, 0)
+        if item:
+            desc = item.data(Qt.ItemDataRole.UserRole)
+            if desc:
+                self.description_changed.emit(desc)
+                return
+        self.description_changed.emit("")
 
     def set_ata_attributes(self, attributes: list[SmartAttribute]):
         """Заполнить таблицу ATA SMART-атрибутами."""
@@ -53,6 +68,18 @@ class SmartTableWidget(QTableWidget):
             id_item = QTableWidgetItem()
             id_item.setData(Qt.ItemDataRole.DisplayRole, attr.id)
             id_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # Описание для панели (хранится в UserRole первого столбца)
+            info = get_attribute_info(attr.id)
+            if info:
+                desc = f"<b>{info.name}</b> (ID {attr.id})"
+                desc += f"<br>{info.description}"
+                if info.is_critical:
+                    desc += '<br><span style="color: #f9e2af;">⚠ Критический атрибут — влияет на надёжность диска</span>'
+            else:
+                desc = (f"<b>Unknown Attribute</b> (ID {attr.id})"
+                        f"<br>Атрибут не найден в базе SMART")
+            id_item.setData(Qt.ItemDataRole.UserRole, desc)
 
             # Name
             name_item = QTableWidgetItem(attr.name)
@@ -121,44 +148,60 @@ class SmartTableWidget(QTableWidget):
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
 
-        # Формируем строки для NVMe
+        # Формируем строки для NVMe: (name, value, health, description)
+        _nf = NVME_HEALTH_FIELDS
         rows_data = [
             ("Critical Warning", f"0x{info.critical_warning:02X}",
-             HealthLevel.CRITICAL if info.critical_warning else HealthLevel.GOOD),
+             HealthLevel.CRITICAL if info.critical_warning else HealthLevel.GOOD,
+             _nf["critical_warning"].description),
             ("Temperature", f"{info.temperature_celsius} °C",
              HealthLevel.CRITICAL if info.temperature_celsius > 70
              else HealthLevel.WARNING if info.temperature_celsius > 60
-             else HealthLevel.GOOD),
+             else HealthLevel.GOOD,
+             _nf["temperature_celsius"].description),
             ("Available Spare", f"{info.available_spare}%",
              HealthLevel.CRITICAL if info.available_spare < info.available_spare_threshold
              else HealthLevel.WARNING if info.available_spare < info.available_spare_threshold + 10
-             else HealthLevel.GOOD),
+             else HealthLevel.GOOD,
+             _nf["available_spare"].description),
             ("Available Spare Threshold", f"{info.available_spare_threshold}%",
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["available_spare_threshold"].description),
             ("Percentage Used", f"{info.percentage_used}%",
              HealthLevel.CRITICAL if info.percentage_used > 100
              else HealthLevel.WARNING if info.percentage_used > 80
-             else HealthLevel.GOOD),
+             else HealthLevel.GOOD,
+             _nf["percentage_used"].description),
             ("Data Read", format_capacity(info.data_units_read * 512000),
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["data_units_read"].description),
             ("Data Written", format_capacity(info.data_units_written * 512000),
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["data_units_written"].description),
             ("Host Read Commands", f"{info.host_read_commands:,}",
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["host_read_commands"].description),
             ("Host Write Commands", f"{info.host_write_commands:,}",
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["host_write_commands"].description),
             ("Controller Busy Time", format_hours(info.controller_busy_time // 60) if info.controller_busy_time else "0",
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["controller_busy_time"].description),
             ("Power Cycles", f"{info.power_cycles:,}",
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["power_cycles"].description),
             ("Power-On Hours", format_hours(info.power_on_hours),
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["power_on_hours"].description),
             ("Unsafe Shutdowns", f"{info.unsafe_shutdowns:,}",
-             HealthLevel.WARNING if info.unsafe_shutdowns > 100 else HealthLevel.GOOD),
+             HealthLevel.WARNING if info.unsafe_shutdowns > 100 else HealthLevel.GOOD,
+             _nf["unsafe_shutdowns"].description),
             ("Media Errors", f"{info.media_errors:,}",
-             HealthLevel.CRITICAL if info.media_errors > 0 else HealthLevel.GOOD),
+             HealthLevel.CRITICAL if info.media_errors > 0 else HealthLevel.GOOD,
+             _nf["media_errors"].description),
             ("Error Log Entries", f"{info.error_log_entries:,}",
-             HealthLevel.UNKNOWN),
+             HealthLevel.UNKNOWN,
+             _nf["error_log_entries"].description),
         ]
 
         # Добавляем датчики температуры если есть
@@ -166,12 +209,16 @@ class SmartTableWidget(QTableWidget):
             rows_data.append((
                 f"Temperature Sensor {i + 1}", f"{temp} °C",
                 HealthLevel.WARNING if temp > 60 else HealthLevel.GOOD,
+                f"Показание температурного датчика #{i + 1}",
             ))
 
         self.setRowCount(len(rows_data))
 
-        for row, (name, value, health) in enumerate(rows_data):
+        for row, (name, value, health, desc_text) in enumerate(rows_data):
             name_item = QTableWidgetItem(name)
+            # Описание для панели
+            name_item.setData(Qt.ItemDataRole.UserRole,
+                              f"<b>{name}</b><br>{desc_text}")
             value_item = QTableWidgetItem(value)
             value_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
@@ -205,6 +252,7 @@ class SmartTableWidget(QTableWidget):
 
     def show_message(self, message: str):
         """Показать сообщение вместо данных (напр. 'SMART not supported')."""
+        self.description_changed.emit("")
         self.setSortingEnabled(False)
         self.clear()
         self.setColumnCount(1)

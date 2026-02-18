@@ -16,9 +16,9 @@
 - Требует запуска от администратора для доступа к SMART
 
 ## Архитектура
-- `disk_diag/core/` — backend (Windows API, перечисление дисков, SMART ATA, NVMe health, оценка здоровья)
+- `disk_diag/core/` — backend (Windows API, перечисление дисков, SMART ATA, NVMe health, оценка здоровья, бенчмарк)
 - `disk_diag/data/` — база SMART-атрибутов (smart_db.py), описания NVMe полей
-- `disk_diag/gui/` — PySide6 GUI (тёмная тема Catppuccin Mocha, таблицы, бейдж здоровья)
+- `disk_diag/gui/` — PySide6 GUI (тёмная тема Catppuccin Mocha, вкладки SMART + Benchmark)
 - `disk_diag/utils/` — admin check, форматирование
 - `run.py` — entry point с UAC elevation
 
@@ -29,3 +29,7 @@
 - Перечисление дисков: read_only=True, для SMART: read_only=False
 - Temperature raw value: младший байт = °C, Kingston пакует min/max в старшие байты
 - SSD определяется по наличию SSD-специфичных SMART атрибутов (170-177, 231, 233)
+- bDriveNumber в SENDCMDINPARAMS: всегда 0 (устройство выбирается по handle, не по номеру)
+- Бенчмарк использует FILE_FLAG_NO_BUFFERING + VirtualAlloc для обхода кэша Windows
+- Ёмкость диска: 3 метода (GET_LENGTH_INFO → GEOMETRY_EX → STORAGE_READ_CAPACITY)
+- Описания SMART-атрибутов хранятся в UserRole (Qt.ItemDataRole) — корректно при сортировке

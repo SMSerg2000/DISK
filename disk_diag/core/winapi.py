@@ -7,6 +7,8 @@ import logging
 from .constants import (
     GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
     FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_FLAG_NO_BUFFERING, FILE_BEGIN,
+    MEM_COMMIT, MEM_RESERVE, MEM_RELEASE, PAGE_READWRITE,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,45 @@ _DeviceIoControl.argtypes = [
 _GetLastError = kernel32.GetLastError
 _FormatMessageW = kernel32.FormatMessageW
 
+# --- ReadFile ---
+_ReadFile = kernel32.ReadFile
+_ReadFile.restype = wintypes.BOOL
+_ReadFile.argtypes = [
+    wintypes.HANDLE,                    # hFile
+    ctypes.c_void_p,                    # lpBuffer
+    wintypes.DWORD,                     # nNumberOfBytesToRead
+    ctypes.POINTER(wintypes.DWORD),     # lpNumberOfBytesRead
+    ctypes.c_void_p,                    # lpOverlapped
+]
+
+# --- SetFilePointerEx ---
+_SetFilePointerEx = kernel32.SetFilePointerEx
+_SetFilePointerEx.restype = wintypes.BOOL
+_SetFilePointerEx.argtypes = [
+    wintypes.HANDLE,                            # hFile
+    wintypes.LARGE_INTEGER,                     # liDistanceToMove
+    ctypes.POINTER(wintypes.LARGE_INTEGER),     # lpNewFilePointer
+    wintypes.DWORD,                             # dwMoveMethod
+]
+
+# --- VirtualAlloc / VirtualFree (для выровненных буферов) ---
+_VirtualAlloc = kernel32.VirtualAlloc
+_VirtualAlloc.restype = ctypes.c_void_p
+_VirtualAlloc.argtypes = [
+    ctypes.c_void_p,    # lpAddress
+    ctypes.c_size_t,    # dwSize
+    wintypes.DWORD,     # flAllocationType
+    wintypes.DWORD,     # flProtect
+]
+
+_VirtualFree = kernel32.VirtualFree
+_VirtualFree.restype = wintypes.BOOL
+_VirtualFree.argtypes = [
+    ctypes.c_void_p,    # lpAddress
+    ctypes.c_size_t,    # dwSize
+    wintypes.DWORD,     # dwFreeType
+]
+
 
 def _get_error_message(error_code: int) -> str:
     """Получить текстовое описание Windows-ошибки."""
@@ -97,14 +138,42 @@ def _get_error_message(error_code: int) -> str:
     return buf.value.strip()
 
 
+# --- AlignedBuffer ---
+
+class AlignedBuffer:
+    """Page-aligned буфер через VirtualAlloc для FILE_FLAG_NO_BUFFERING I/O.
+
+    FILE_FLAG_NO_BUFFERING требует буфер, выровненный по размеру сектора.
+    VirtualAlloc возвращает page-aligned (4096) память — этого достаточно.
+    """
+
+    def __init__(self, size: int):
+        self.size = size
+        self.ptr = _VirtualAlloc(None, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+        if not self.ptr:
+            raise MemoryError(f"VirtualAlloc failed for {size} bytes")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.free()
+
+    def free(self):
+        if self.ptr:
+            _VirtualFree(self.ptr, 0, MEM_RELEASE)
+            self.ptr = None
+
+
 # --- DeviceHandle ---
 
 class DeviceHandle:
     """Context manager для безопасного открытия/закрытия PhysicalDrive."""
 
-    def __init__(self, drive_number: int, read_only: bool = False):
+    def __init__(self, drive_number: int, read_only: bool = False, flags: int = 0):
         self.drive_number = drive_number
         self.read_only = read_only
+        self.flags = flags
         self._handle = None
 
     def __enter__(self) -> "DeviceHandle":
@@ -115,7 +184,7 @@ class DeviceHandle:
         # Сбрасываем ошибку перед вызовом
         kernel32.SetLastError(0)
 
-        self._handle = _CreateFileW(path, access, share, None, OPEN_EXISTING, 0, None)
+        self._handle = _CreateFileW(path, access, share, None, OPEN_EXISTING, self.flags, None)
 
         # Проверяем handle: None (c_void_p для NULL) или INVALID_HANDLE_VALUE
         handle_failed = (
@@ -207,6 +276,51 @@ class DeviceHandle:
             )
 
         return bytes(out_buffer[:bytes_returned.value])
+
+    def seek(self, offset: int):
+        """Установить файловый указатель на абсолютное смещение."""
+        result = _SetFilePointerEx(self._handle, offset, None, FILE_BEGIN)
+        if not result:
+            error_code = _GetLastError()
+            error_msg = _get_error_message(error_code)
+            raise DiskAccessError(
+                f"SetFilePointerEx({offset}) failed: error {error_code} ({error_msg})"
+            )
+
+    def read(self, buffer_ptr, size: int) -> int:
+        """Прочитать данные с текущей позиции в буфер.
+
+        Args:
+            buffer_ptr: Указатель на буфер (c_void_p или AlignedBuffer.ptr)
+            size: Количество байт для чтения
+
+        Returns:
+            Количество прочитанных байт
+        """
+        bytes_read = wintypes.DWORD(0)
+        result = _ReadFile(self._handle, buffer_ptr, size, ctypes.byref(bytes_read), None)
+        if not result:
+            error_code = _GetLastError()
+            error_msg = _get_error_message(error_code)
+            raise DiskAccessError(
+                f"ReadFile({size}) failed: error {error_code} ({error_msg})"
+            )
+        return bytes_read.value
+
+    def read_at(self, offset: int, buffer_ptr, size: int) -> int:
+        """Seek + Read: прочитать данные по абсолютному смещению.
+
+        Args:
+            offset: Абсолютное смещение на диске (должно быть выровнено по сектору
+                     при использовании FILE_FLAG_NO_BUFFERING)
+            buffer_ptr: Указатель на выровненный буфер
+            size: Количество байт для чтения
+
+        Returns:
+            Количество прочитанных байт
+        """
+        self.seek(offset)
+        return self.read(buffer_ptr, size)
 
     def ioctl_raw(
         self,

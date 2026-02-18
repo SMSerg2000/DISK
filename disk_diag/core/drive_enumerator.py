@@ -7,6 +7,8 @@ import struct
 from .constants import (
     IOCTL_STORAGE_QUERY_PROPERTY,
     IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+    IOCTL_DISK_GET_LENGTH_INFO,
+    IOCTL_STORAGE_READ_CAPACITY,
     SMART_GET_VERSION,
     StorageDeviceProperty,
     PropertyStandardQuery,
@@ -95,15 +97,49 @@ def _get_device_descriptor(handle: DeviceHandle) -> tuple[str, str, str, int]:
 
 
 def _get_capacity(handle: DeviceHandle) -> int:
-    """Получить ёмкость диска в байтах через IOCTL_DISK_GET_DRIVE_GEOMETRY_EX."""
+    """Получить ёмкость диска в байтах.
+
+    Методы (в порядке приоритета):
+    1. IOCTL_DISK_GET_LENGTH_INFO — самый надёжный, просто int64
+    2. IOCTL_DISK_GET_DRIVE_GEOMETRY_EX — DiskSize поле
+    3. IOCTL_STORAGE_READ_CAPACITY — через storage stack (работает
+       даже когда disk-level IOCTL падают с error 1117)
+    4. 0 если всё не сработало
+    """
+    # Метод 1: GET_LENGTH_INFO (8 байт = int64)
+    try:
+        data = handle.ioctl(IOCTL_DISK_GET_LENGTH_INFO, None, 16)
+        if len(data) >= 8:
+            disk_size = struct.unpack_from("<Q", data, 0)[0]
+            if disk_size > 0:
+                return disk_size
+    except IoctlFailed as e:
+        logger.debug(f"IOCTL_DISK_GET_LENGTH_INFO failed: {e}")
+
+    # Метод 2: GEOMETRY_EX (24 байта геометрии + 8 байт DiskSize)
     try:
         data = handle.ioctl(IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, None, 256)
         if len(data) >= 32:
-            # DISK_GEOMETRY (24 bytes) + DiskSize (8 bytes)
             disk_size = struct.unpack_from("<Q", data, 24)[0]
-            return disk_size
-    except IoctlFailed:
-        pass
+            if disk_size > 0:
+                return disk_size
+    except IoctlFailed as e:
+        logger.debug(f"IOCTL_DISK_GET_DRIVE_GEOMETRY_EX failed: {e}")
+
+    # Метод 3: STORAGE_READ_CAPACITY — storage-level, обходит disk class driver
+    # Структура STORAGE_READ_CAPACITY:
+    #   Version(4) + Size(4) + BlockLength(4) + pad(4) +
+    #   NumberOfBlocks(8) + DiskLength(8) = 32 bytes
+    try:
+        data = handle.ioctl(IOCTL_STORAGE_READ_CAPACITY, None, 48)
+        if len(data) >= 32:
+            disk_length = struct.unpack_from("<Q", data, 24)[0]
+            if disk_length > 0:
+                logger.debug(f"STORAGE_READ_CAPACITY: {disk_length} bytes")
+                return disk_length
+    except IoctlFailed as e:
+        logger.debug(f"IOCTL_STORAGE_READ_CAPACITY failed: {e}")
+
     return 0
 
 
