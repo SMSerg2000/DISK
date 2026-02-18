@@ -1,0 +1,98 @@
+"""Windows API константы для работы с дисками."""
+
+# --- File access ---
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+OPEN_EXISTING = 3
+FILE_ATTRIBUTE_NORMAL = 0x00000080
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+INVALID_HANDLE_VALUE = -1
+
+# --- IOCTL codes ---
+# CTL_CODE(FILE_DEVICE_MASS_STORAGE=0x2D, 0x0500, METHOD_BUFFERED=0, FILE_ANY_ACCESS=0)
+IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
+
+# CTL_CODE(FILE_DEVICE_DISK=0x07, 0x0000, METHOD_BUFFERED=0, FILE_ANY_ACCESS=0)
+IOCTL_DISK_GET_DRIVE_GEOMETRY = 0x00070000
+
+# CTL_CODE(FILE_DEVICE_DISK=0x07, 0x0060, METHOD_BUFFERED=0, FILE_ANY_ACCESS=0)
+IOCTL_DISK_GET_DRIVE_GEOMETRY_EX = 0x000700A0
+
+# CTL_CODE(FILE_DEVICE_DISK=0x07, 0x0020, METHOD_BUFFERED=0, FILE_READ_ACCESS=1)
+SMART_GET_VERSION = 0x00074080
+
+# CTL_CODE(FILE_DEVICE_DISK=0x07, 0x0021, METHOD_BUFFERED=0, FILE_READ_ACCESS|FILE_WRITE_ACCESS)
+SMART_SEND_DRIVE_COMMAND = 0x0007C084
+
+# CTL_CODE(FILE_DEVICE_DISK=0x07, 0x0022, METHOD_BUFFERED=0, FILE_READ_ACCESS|FILE_WRITE_ACCESS)
+SMART_RCV_DRIVE_DATA = 0x0007C088
+
+# --- ATA commands ---
+ATA_SMART_CMD = 0xB0
+ATA_ID_CMD = 0xEC
+
+# SMART sub-commands (bFeaturesReg)
+SMART_READ_ATTRIBUTES = 0xD0
+SMART_READ_THRESHOLDS = 0xD1
+SMART_ENABLE_OPERATIONS = 0xD8
+SMART_READ_LOG = 0xD5
+
+# SMART cylinder magic values
+SMART_CYL_LOW = 0x4F
+SMART_CYL_HI = 0xC2
+
+# --- STORAGE_PROPERTY_ID ---
+StorageDeviceProperty = 0
+StorageAdapterProperty = 1
+StorageDeviceProtocolSpecificProperty = 50
+
+# --- STORAGE_QUERY_TYPE ---
+PropertyStandardQuery = 0
+
+# --- STORAGE_PROTOCOL_TYPE ---
+ProtocolTypeUnknown = 0
+ProtocolTypeScsi = 1
+ProtocolTypeAta = 2
+ProtocolTypeNvme = 3
+
+# --- STORAGE_PROTOCOL_NVME_DATA_TYPE ---
+NVMeDataTypeUnknown = 0
+NVMeDataTypeIdentify = 1
+NVMeDataTypeLogPage = 2
+NVMeDataTypeFeature = 3
+
+# --- NVMe log page IDs ---
+NVME_LOG_PAGE_HEALTH_INFO = 0x02
+
+# --- STORAGE_BUS_TYPE ---
+BUS_TYPE_NAMES = {
+    0x00: "Unknown",
+    0x01: "SCSI",
+    0x02: "ATAPI",
+    0x03: "ATA",
+    0x04: "IEEE 1394",
+    0x05: "SSA",
+    0x06: "Fibre Channel",
+    0x07: "USB",
+    0x08: "RAID",
+    0x09: "iSCSI",
+    0x0A: "SAS",
+    0x0B: "SATA",
+    0x0C: "SD",
+    0x0D: "MMC",
+    0x0E: "Virtual",
+    0x0F: "File Backed Virtual",
+    0x10: "Storage Spaces",
+    0x11: "NVMe",
+    0x12: "SCM",
+    0x13: "UFS",
+}
+
+BusTypeAta = 0x03
+BusTypeUsb = 0x07
+BusTypeSata = 0x0B
+BusTypeNvme = 0x11
+
+# Максимальное количество физических дисков для сканирования
+MAX_PHYSICAL_DRIVES = 16
