@@ -16,9 +16,9 @@
 - Требует запуска от администратора для доступа к SMART
 
 ## Архитектура
-- `disk_diag/core/` — backend (Windows API, перечисление дисков, SMART ATA, NVMe health, оценка здоровья, бенчмарк)
+- `disk_diag/core/` — backend (Windows API, перечисление дисков, SMART ATA, NVMe health, оценка здоровья, бенчмарк, surface scan)
 - `disk_diag/data/` — база SMART-атрибутов (smart_db.py), описания NVMe полей
-- `disk_diag/gui/` — PySide6 GUI (тёмная тема Catppuccin Mocha, вкладки SMART + Benchmark)
+- `disk_diag/gui/` — PySide6 GUI (тёмная тема Catppuccin Mocha, вкладки SMART + Benchmark + Surface Scan)
 - `disk_diag/utils/` — admin check, форматирование
 - `run.py` — entry point с UAC elevation
 
@@ -33,3 +33,5 @@
 - Бенчмарк использует FILE_FLAG_NO_BUFFERING + VirtualAlloc для обхода кэша Windows
 - Ёмкость диска: 3 метода (GET_LENGTH_INFO → GEOMETRY_EX → STORAGE_READ_CAPACITY)
 - Описания SMART-атрибутов хранятся в UserRole (Qt.ItemDataRole) — корректно при сортировке
+- Surface Scan: последовательный read без seek (указатель двигается сам), seek только после ошибки
+- Surface Scan: выбор размера блока (64KB / 256KB / 1MB / 4MB), GUI обновляется через QTimer 30fps

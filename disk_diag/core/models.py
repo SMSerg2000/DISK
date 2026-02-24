@@ -109,3 +109,42 @@ class BenchmarkResult:
 
     # Scatter plot data: (offset_gb, latency_us)
     latency_points: list[tuple[float, float]] = field(default_factory=list)
+
+
+class BlockCategory(Enum):
+    """Категория времени отклика блока (как в Victoria HDD)."""
+    PENDING = 0       # ещё не просканирован
+    EXCELLENT = 1     # < 5ms
+    GOOD = 2          # < 20ms
+    ACCEPTABLE = 3    # < 50ms
+    SLOW = 4          # < 150ms
+    VERY_SLOW = 5     # < 500ms
+    CRITICAL = 6      # >= 500ms
+    ERROR = 7         # ошибка чтения
+
+    @staticmethod
+    def from_latency_ms(latency_ms: float) -> "BlockCategory":
+        if latency_ms < 5:
+            return BlockCategory.EXCELLENT
+        elif latency_ms < 20:
+            return BlockCategory.GOOD
+        elif latency_ms < 50:
+            return BlockCategory.ACCEPTABLE
+        elif latency_ms < 150:
+            return BlockCategory.SLOW
+        elif latency_ms < 500:
+            return BlockCategory.VERY_SLOW
+        else:
+            return BlockCategory.CRITICAL
+
+
+@dataclass
+class SurfaceScanResult:
+    """Результаты сканирования поверхности."""
+    total_blocks: int = 0
+    scanned_blocks: int = 0
+    error_count: int = 0
+    error_offsets: list[int] = field(default_factory=list)
+    counts: dict[int, int] = field(default_factory=dict)  # BlockCategory.value → count
+    elapsed_sec: float = 0.0
+    avg_speed_mbps: float = 0.0
