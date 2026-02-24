@@ -20,6 +20,14 @@ Built with Python + PySide6, using raw Windows API (ctypes) for direct disk acce
 - **Direct I/O** — `FILE_FLAG_NO_BUFFERING` bypasses OS cache for honest results
 - **Aligned buffers** — `VirtualAlloc` for sector-aligned memory
 
+### Surface Scan
+- **Full surface test** — sequential read of entire disk, Victoria HDD style
+- **Block map** — real-time color grid showing read latency per block
+- **Color categories** — < 5ms / < 20ms / < 50ms / < 150ms / < 500ms / >= 500ms / Error
+- **Configurable block size** — 64 KB, 256 KB, 1 MB (default), 4 MB
+- **Live statistics** — per-category counters, current speed, elapsed time, ETA
+- **Error resilience** — continues scanning after I/O errors, marks bad blocks with X
+
 ### Drive Detection
 - Scans PhysicalDrive0..15 via Windows API
 - Model, serial number, firmware, capacity, interface type
@@ -29,7 +37,7 @@ Built with Python + PySide6, using raw Windows API (ctypes) for direct disk acce
 
 ## Screenshots
 
-Dark theme (Catppuccin Mocha) with SMART table and Benchmark tabs.
+Dark theme (Catppuccin Mocha) with SMART, Benchmark, and Surface Scan tabs.
 
 ## Requirements
 
@@ -64,12 +72,13 @@ disk_diag/
 │   ├── constants.py    # IOCTL codes, Windows API constants
 │   ├── structures.py   # ctypes Structure definitions
 │   ├── winapi.py       # CreateFile, DeviceIoControl, ReadFile, AlignedBuffer
-│   ├── models.py       # Dataclasses: DriveInfo, SmartAttribute, BenchmarkResult
+│   ├── models.py       # Dataclasses: DriveInfo, SmartAttribute, BenchmarkResult, SurfaceScanResult
 │   ├── drive_enumerator.py  # PhysicalDrive scanning
 │   ├── smart_ata.py    # ATA SMART attributes + thresholds
 │   ├── smart_nvme.py   # NVMe Health Info log page
 │   ├── health_assessor.py   # Health evaluation logic
-│   └── benchmark.py    # Sequential + Random 4K read engine
+│   ├── benchmark.py    # Sequential + Random 4K read engine
+│   └── surface_scan.py # Surface scan engine (full disk read test)
 ├── data/
 │   ├── smart_db.py     # SMART attribute database (~60 entries)
 │   └── nvme_fields.py  # NVMe health field descriptions
@@ -80,6 +89,7 @@ disk_diag/
 │   ├── smart_table.py  # SMART table with color coding
 │   ├── health_indicator.py  # Health badge (GOOD/WARNING/CRITICAL)
 │   ├── benchmark_panel.py   # Benchmark UI + scatter plot
+│   ├── surface_panel.py     # Surface scan UI + block map
 │   └── theme.py        # Catppuccin Mocha dark theme
 └── utils/
     ├── admin.py        # Admin privilege check + UAC elevation
@@ -93,6 +103,7 @@ disk_diag/
 - ATA/SMART structures use `_pack_ = 1` (fixed binary format)
 - `INVALID_HANDLE_VALUE` check: `ctypes.c_void_p(-1).value` for 64-bit compatibility
 - Benchmark uses `FILE_FLAG_NO_BUFFERING` + `VirtualAlloc` to bypass OS cache
+- Surface scan reads sequentially without seek (file pointer advances automatically); seek only after errors
 - SMART `bDriveNumber` always 0 — device selected by handle, not legacy IDE number
 - Disk capacity: 3 fallback methods (GET_LENGTH_INFO → GEOMETRY_EX → STORAGE_READ_CAPACITY)
 
