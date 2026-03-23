@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v1.0.0
+# DISK Diagnostic Tool v1.1.0
 
 <p align="center">
   <b>Утилита диагностики SSD/HDD для Windows — аналог <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>

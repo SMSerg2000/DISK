@@ -155,7 +155,7 @@ class SmartTableWidget(QTableWidget):
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
 
-        # Формируем строки для NVMe: (name, value, health, description)
+        # Формируем строки для NVMe: (name, value, health, description, is_critical)
         _nf = NVME_HEALTH_FIELDS
         _wmi = info.wmi_fallback  # WMI fallback — показываем только доступные поля
 
@@ -163,101 +163,109 @@ class SmartTableWidget(QTableWidget):
 
         if not _wmi:
             rows_data.append(
-                ("Critical Warning", f"0x{info.critical_warning:02X}",
+                (_nf["critical_warning"].name, f"0x{info.critical_warning:02X}",
                  HealthLevel.CRITICAL if info.critical_warning else HealthLevel.GOOD,
-                 _nf["critical_warning"].description))
+                 _nf["critical_warning"].description, True))
 
         rows_data.append(
-            ("Temperature", f"{info.temperature_celsius} °C",
+            (_nf["temperature_celsius"].name, f"{info.temperature_celsius} °C",
              HealthLevel.CRITICAL if info.temperature_celsius > 70
              else HealthLevel.WARNING if info.temperature_celsius > 60
              else HealthLevel.GOOD,
-             _nf["temperature_celsius"].description))
+             _nf["temperature_celsius"].description, False))
 
         if not _wmi:
             rows_data.append(
-                ("Available Spare", f"{info.available_spare}%",
+                (_nf["available_spare"].name, f"{info.available_spare}%",
                  HealthLevel.CRITICAL if info.available_spare < info.available_spare_threshold
                  else HealthLevel.WARNING if info.available_spare < info.available_spare_threshold + 10
                  else HealthLevel.GOOD,
-                 _nf["available_spare"].description))
+                 _nf["available_spare"].description, True))
             rows_data.append(
-                ("Available Spare Threshold", f"{info.available_spare_threshold}%",
+                (_nf["available_spare_threshold"].name, f"{info.available_spare_threshold}%",
                  HealthLevel.UNKNOWN,
-                 _nf["available_spare_threshold"].description))
+                 _nf["available_spare_threshold"].description, False))
 
         rows_data.append(
-            ("Percentage Used", f"{info.percentage_used}%",
+            (_nf["percentage_used"].name, f"{info.percentage_used}%",
              HealthLevel.CRITICAL if info.percentage_used > 100
              else HealthLevel.WARNING if info.percentage_used > 80
              else HealthLevel.GOOD,
-             _nf["percentage_used"].description))
+             _nf["percentage_used"].description, False))
 
         if not _wmi:
             rows_data.extend([
-                ("Data Read", format_capacity(info.data_units_read * 512000),
+                (_nf["data_units_read"].name, format_capacity(info.data_units_read * 512000),
                  HealthLevel.UNKNOWN,
-                 _nf["data_units_read"].description),
-                ("Data Written", format_capacity(info.data_units_written * 512000),
+                 _nf["data_units_read"].description, False),
+                (_nf["data_units_written"].name, format_capacity(info.data_units_written * 512000),
                  HealthLevel.UNKNOWN,
-                 _nf["data_units_written"].description),
-                ("Host Read Commands", f"{info.host_read_commands:,}",
+                 _nf["data_units_written"].description, False),
+                (_nf["host_read_commands"].name, f"{info.host_read_commands:,}",
                  HealthLevel.UNKNOWN,
-                 _nf["host_read_commands"].description),
-                ("Host Write Commands", f"{info.host_write_commands:,}",
+                 _nf["host_read_commands"].description, False),
+                (_nf["host_write_commands"].name, f"{info.host_write_commands:,}",
                  HealthLevel.UNKNOWN,
-                 _nf["host_write_commands"].description),
-                ("Controller Busy Time",
+                 _nf["host_write_commands"].description, False),
+                (_nf["controller_busy_time"].name,
                  format_hours(info.controller_busy_time // 60) if info.controller_busy_time else "0",
                  HealthLevel.UNKNOWN,
-                 _nf["controller_busy_time"].description),
+                 _nf["controller_busy_time"].description, False),
             ])
 
         if info.power_cycles:
             rows_data.append(
-                ("Power Cycles", f"{info.power_cycles:,}",
+                (_nf["power_cycles"].name, f"{info.power_cycles:,}",
                  HealthLevel.UNKNOWN,
-                 _nf["power_cycles"].description))
+                 _nf["power_cycles"].description, False))
 
         if info.power_on_hours:
             rows_data.append(
-                ("Power-On Hours", format_hours(info.power_on_hours),
+                (_nf["power_on_hours"].name, format_hours(info.power_on_hours),
                  HealthLevel.UNKNOWN,
-                 _nf["power_on_hours"].description))
+                 _nf["power_on_hours"].description, False))
 
         if not _wmi:
             rows_data.extend([
-                ("Unsafe Shutdowns", f"{info.unsafe_shutdowns:,}",
+                (_nf["unsafe_shutdowns"].name, f"{info.unsafe_shutdowns:,}",
                  HealthLevel.WARNING if info.unsafe_shutdowns > 100 else HealthLevel.GOOD,
-                 _nf["unsafe_shutdowns"].description),
-                ("Media Errors", f"{info.media_errors:,}",
+                 _nf["unsafe_shutdowns"].description, False),
+                (_nf["media_errors"].name, f"{info.media_errors:,}",
                  HealthLevel.CRITICAL if info.media_errors > 0 else HealthLevel.GOOD,
-                 _nf["media_errors"].description),
-                ("Error Log Entries", f"{info.error_log_entries:,}",
+                 _nf["media_errors"].description, True),
+                (_nf["error_log_entries"].name, f"{info.error_log_entries:,}",
                  HealthLevel.UNKNOWN,
-                 _nf["error_log_entries"].description),
+                 _nf["error_log_entries"].description, False),
             ])
 
         if _wmi:
             rows_data.append(
-                (tr("Data Source", "Источник данных"), tr("WMI (limited — NVMe IOCTL not supported by driver)", "WMI (ограниченные данные — NVMe IOCTL не поддерживается драйвером)"),
+                (tr("Data Source", "Источник данных"),
+                 tr("WMI (limited — NVMe IOCTL not supported by driver)",
+                    "WMI (ограниченные данные — NVMe IOCTL не поддерживается драйвером)"),
                  HealthLevel.UNKNOWN,
-                 "NVMe protocol-specific IOCTL не поддерживается драйвером диска. "
-                 "Данные получены через Windows Management Instrumentation (ограниченный набор)."))
-
+                 tr("NVMe IOCTL not supported by driver. Data via WMI (limited).",
+                    "NVMe IOCTL не поддерживается драйвером. Данные через WMI (ограниченные)."),
+                 False))
 
         # Добавляем датчики температуры если есть
         for i, temp in enumerate(info.temperature_sensors):
             rows_data.append((
-                f"Temperature Sensor {i + 1}", f"{temp} °C",
+                tr(f"Temperature Sensor {i + 1}", f"Датчик температуры {i + 1}"),
+                f"{temp} °C",
                 HealthLevel.WARNING if temp > 60 else HealthLevel.GOOD,
-                f"Показание температурного датчика #{i + 1}",
+                tr(f"Temperature sensor #{i + 1} reading",
+                   f"Показание температурного датчика #{i + 1}"),
+                False,
             ))
 
         self.setRowCount(len(rows_data))
 
-        for row, (name, value, health, desc_text) in enumerate(rows_data):
+        for row, (name, value, health, desc_text, critical) in enumerate(rows_data):
             name_item = QTableWidgetItem(name)
+            # Критические параметры — синим
+            if critical:
+                name_item.setForeground(QColor(137, 180, 250))  # blue
             # Описание для панели
             name_item.setData(Qt.ItemDataRole.UserRole,
                               f"<b>{name}</b><br>{desc_text}")
