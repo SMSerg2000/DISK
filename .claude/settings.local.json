@@ -31,7 +31,9 @@
       "Bash(curl:*)",
       "Bash(100 лет\" to avoid absurd numbers:*)",
       "Bash(100 лет\":*)",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)"
     ]
   }
 }

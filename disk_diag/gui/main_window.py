@@ -360,7 +360,9 @@ class MainWindow(QMainWindow):
         """Экспорт результатов бенчмарка в текстовый файл."""
         result = self._benchmark_panel._last_result
         if not result:
-            QMessageBox.information(self, "Export", "Нет результатов бенчмарка.\nСначала запустите тест.")
+            QMessageBox.information(self, tr("Export", "Экспорт"),
+                tr("No benchmark results.\nRun a test first.",
+                   "Нет результатов бенчмарка.\nСначала запустите тест."))
             return
 
         drive = self._drive_selector.get_selected_drive()
@@ -371,60 +373,60 @@ class MainWindow(QMainWindow):
         default_name = f"Benchmark_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}.txt"
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Экспорт бенчмарка", default_name,
+            self, tr("Export Benchmark", "Экспорт бенчмарка"), default_name,
             "Text files (*.txt);;All files (*)",
         )
         if not path:
             return
 
         lines = []
-        lines.append(f"{__app_name__} v{__version__} — Benchmark Report")
-        lines.append(f"Date: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        lines.append(f"{__app_name__} v{__version__} — {tr('Benchmark Report', 'Отчёт бенчмарка')}")
+        lines.append(f"{tr('Date', 'Дата')}: {datetime.now():%Y-%m-%d %H:%M:%S}")
         lines.append("=" * 60)
-        lines.append(f"Model:      {drive.model}")
-        lines.append(f"Serial:     {drive.serial_number}")
-        lines.append(f"Capacity:   {drive.capacity_bytes / (1024**3):.1f} GB")
-        lines.append(f"Interface:  {drive.interface_type.value}")
+        lines.append(f"{tr('Model', 'Модель')}:      {drive.model}")
+        lines.append(f"{tr('Serial', 'Серийный №')}:     {drive.serial_number}")
+        lines.append(f"{tr('Capacity', 'Ёмкость')}:   {drive.capacity_bytes / (1024**3):.1f} GB")
+        lines.append(f"{tr('Interface', 'Интерфейс')}:  {drive.interface_type.value}")
         lines.append("=" * 60)
 
         r = result
         lines.append("")
-        lines.append(f"{'Test':<25} {'Result':>15} {'Details'}")
+        lines.append(f"{tr('Test', 'Тест'):<25} {tr('Result', 'Результат'):>15} {tr('Details', 'Детали')}")
         lines.append("-" * 60)
 
         if r.sequential_speed_mbps > 0:
-            lines.append(f"{'Seq Read':<25} {r.sequential_speed_mbps:>12.1f} MB/s")
+            lines.append(f"{tr('Seq Read', 'Послед. чтение'):<25} {r.sequential_speed_mbps:>12.1f} MB/s")
         if r.seq_write_speed_mbps > 0:
-            lines.append(f"{'Seq Write':<25} {r.seq_write_speed_mbps:>12.1f} MB/s")
+            lines.append(f"{tr('Seq Write', 'Послед. запись'):<25} {r.seq_write_speed_mbps:>12.1f} MB/s")
         if r.random_reads_count > 0:
-            lines.append(f"{'Random 4K Read':<25} {r.random_iops:>12,.0f} IOPS"
+            lines.append(f"{tr('Random 4K Read', '4K чтение'):<25} {r.random_iops:>12,.0f} IOPS"
                          f"  Avg:{r.random_avg_latency_us:.0f} P95:{r.random_p95_latency_us:.0f} "
                          f"P99:{r.random_p99_latency_us:.0f} μs")
         if r.random_write_count > 0:
-            lines.append(f"{'Random 4K Write':<25} {r.random_write_iops:>12,.0f} IOPS"
+            lines.append(f"{tr('Random 4K Write', '4K запись'):<25} {r.random_write_iops:>12,.0f} IOPS"
                          f"  Avg:{r.random_write_avg_latency_us:.0f} μs")
         if r.mixed_count > 0:
-            lines.append(f"{'Mixed I/O 70/30':<25} {r.mixed_total_iops:>12,.0f} IOPS"
+            lines.append(f"{tr('Mixed I/O 70/30', 'Микс 70/30'):<25} {r.mixed_total_iops:>12,.0f} IOPS"
                          f"  R:{r.mixed_read_iops:,.0f} W:{r.mixed_write_iops:,.0f}")
         if r.verify_blocks_tested > 0:
-            status = "PASS" if r.verify_blocks_failed == 0 else f"FAIL ({r.verify_blocks_failed})"
-            lines.append(f"{'Write-Read-Verify':<25} {status:>15}"
-                         f"  {r.verify_blocks_tested} blocks, {r.verify_speed_mbps:.1f} MB/s")
+            status = tr("PASS", "ОК") if r.verify_blocks_failed == 0 else f"{tr('FAIL', 'ОШИБКА')} ({r.verify_blocks_failed})"
+            lines.append(f"{tr('Write-Read-Verify', 'Проверка записи'):<25} {status:>15}"
+                         f"  {r.verify_blocks_tested} {tr('blocks', 'блоков')}, {r.verify_speed_mbps:.1f} MB/s")
         if r.slc_cache_size_gb > 0:
-            lines.append(f"{'SLC Cache Size':<25} {r.slc_cache_size_gb:>12.1f} GB"
-                         f"  SLC:{r.slc_speed_mbps:.0f} Post:{r.slc_post_cache_speed_mbps:.0f} MB/s")
+            lines.append(f"{tr('SLC Cache Size', 'Размер SLC кэша'):<25} {r.slc_cache_size_gb:>12.1f} GB"
+                         f"  SLC:{r.slc_speed_mbps:.0f} {tr('Post', 'После')}:{r.slc_post_cache_speed_mbps:.0f} MB/s")
         elif r.slc_speed_mbps > 0:
-            lines.append(f"{'SLC Cache':<25} {'No cliff':>15}"
-                         f"  Speed:{r.slc_speed_mbps:.0f} MB/s")
+            lines.append(f"{'SLC Cache':<25} {tr('No cliff', 'Без падения'):>15}"
+                         f"  {tr('Speed', 'Скорость')}:{r.slc_speed_mbps:.0f} MB/s")
 
         if r.temp_log:
             lines.append("")
-            lines.append(f"Temperature: {r.temp_log[0][1]:.0f}°C (start) → "
-                         f"{r.temp_log[-1][1]:.0f}°C (end), "
-                         f"max {max(t for _, t in r.temp_log):.0f}°C")
+            lines.append(f"{tr('Temperature', 'Температура')}: {r.temp_log[0][1]:.0f}°C ({tr('start', 'начало')}) → "
+                         f"{r.temp_log[-1][1]:.0f}°C ({tr('end', 'конец')}), "
+                         f"{tr('max', 'макс')} {max(t for _, t in r.temp_log):.0f}°C")
 
         lines.append("")
-        lines.append(f"Generated by {__app_name__} v{__version__}")
+        lines.append(f"{tr('Generated by', 'Создано в')} {__app_name__} v{__version__}")
 
         try:
             with open(path, "w", encoding="utf-8") as f:
