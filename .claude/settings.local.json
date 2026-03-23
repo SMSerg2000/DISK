@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:www.thomas-krenn.com)",
+      "Bash(python -c:*)",
+      "Bash(pip install:*)",
+      "Bash(pyinstaller:*)",
+      "Bash(python -m PyInstaller:*)",
+      "Bash(git init:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git config:*)",
+      "Bash(cd /c/Projects/DISK && python3.14 -c \"from disk_diag.gui.main_window import MainWindow; print\\('Import OK'\\)\" 2>&1 || py -3.14 -c \"from disk_diag.gui.main_window import MainWindow; print\\('Import OK'\\)\" 2>&1 || py -c \"from disk_diag.gui.main_window import MainWindow; print\\('Import OK'\\)\" 2>&1)",
+      "Bash(cd /c/Projects/DISK && py --list 2>&1)",
+      "Bash(cd /c/Projects/DISK && py -3.12 -c \"from disk_diag.gui.main_window import MainWindow; print\\('Import OK'\\)\" 2>&1)",
+      "Bash(cd /c/Projects/DISK && py -3.12 -c \"\nimport ast, sys\n# Check syntax by parsing all new/modified files\nfiles = [\n    'disk_diag/core/models.py',\n    'disk_diag/core/surface_scan.py',\n    'disk_diag/gui/surface_panel.py',\n    'disk_diag/gui/main_window.py',\n]\nfor f in files:\n    try:\n        with open\\(f, 'r', encoding='utf-8'\\) as fh:\n            ast.parse\\(fh.read\\(\\), filename=f\\)\n        print\\(f'OK: {f}'\\)\n    except SyntaxError as e:\n        print\\(f'SYNTAX ERROR in {f}: {e}'\\)\n        sys.exit\\(1\\)\nprint\\('All files parse OK'\\)\n\" 2>&1)",
+      "Bash(py:*)",
+      "Bash(cd /c/Projects/DISK && git push origin master 2>&1)",
+      "Bash(gh auth:*)",
+      "Bash(cd /c/Projects/DISK && gh repo create DISK --public --source=. --remote=origin --description \"DISK Diagnostic Tool — Victoria HDD-style disk diagnostics \\(Python + PySide6\\)\" --push 2>&1)",
+      "Bash(cd /c/Projects/DISK && git add README.md && git commit -m \"$\\(cat <<'EOF'\nUpdate README.md — add Surface Scan section, update project structure\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push origin master 2>&1)",
+      "Bash(powershell:*)",
+      "Bash(pip show:*)",
+      "Bash(pip:*)",
+      "Bash(python:*)",
+      "Bash(curl -sL https://raw.githubusercontent.com/smartmontools/smartmontools/master/smartmontools/scsinvme.cpp)",
+      "Bash(curl:*)",
+      "Bash(100 лет\" to avoid absurd numbers:*)",
+      "Bash(100 лет\":*)",
+      "Bash(python3 -c \":*)"
+    ]
+  }
+}

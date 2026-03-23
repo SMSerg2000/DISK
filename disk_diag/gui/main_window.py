@@ -5,17 +5,24 @@ import logging
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QStatusBar, QMenuBar, QMessageBox, QLabel, QTabWidget,
+    QFileDialog,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
+from PySide6.QtGui import QKeySequence
+
+from datetime import datetime
 
 from .. import __version__, __app_name__
-from ..core.models import DriveInfo, DriveType, InterfaceType, HealthLevel
+from ..core.models import DriveInfo, DriveType, InterfaceType, HealthLevel, NvmeHealthInfo
+from ..data.nvme_fields import NVME_HEALTH_FIELDS
 from ..core.drive_enumerator import enumerate_drives
-from ..core.smart_ata import read_smart_attributes, detect_drive_type_from_smart, get_temperature_from_smart
-from ..core.smart_nvme import read_nvme_health
+from ..core.smart_ata import read_smart_attributes, read_smart_via_sat, detect_drive_type_from_smart, get_temperature_from_smart
+from ..core.smart_nvme import read_nvme_health_auto
+from ..core.smart_usb_nvme import read_usb_nvme_smart
 from ..core.health_assessor import assess_ata_health, assess_nvme_health
 from ..core.winapi import DeviceHandle, DiskAccessError
 from .drive_selector import DriveSelector
+from ..i18n import tr
 from .info_panel import InfoPanel
 from .smart_table import SmartTableWidget
 from .health_indicator import HealthIndicator
@@ -36,15 +43,38 @@ class _SmartWorker(QObject):
 
     def run(self):
         try:
+            cap = self.drive_info.capacity_bytes
             if self.drive_info.interface_type == InterfaceType.NVME:
-                with DeviceHandle(self.drive_info.drive_number) as h:
-                    health_info = read_nvme_health(h)
-                    status = assess_nvme_health(health_info)
+                health_info = read_nvme_health_auto(self.drive_info.drive_number)
+                status = assess_nvme_health(health_info, cap)
+                self.finished.emit(("nvme", health_info, status))
+            elif self.drive_info.interface_type == InterfaceType.USB:
+                dn = self.drive_info.drive_number
+                # 1) USB-SATA: ATA Pass-Through / SCSI SAT
+                with DeviceHandle(dn) as h:
+                    attrs = read_smart_via_sat(h)
+                if attrs:
+                    status = assess_ata_health(attrs, cap)
+                    self.finished.emit(("ata", attrs, status))
+                    return
+                # 2) USB-NVMe: vendor bridge (JMicron/ASMedia/Realtek)
+                logger.info("SAT failed for USB drive, trying USB-NVMe bridges...")
+                health_info = read_usb_nvme_smart(dn)
+                if health_info:
+                    status = assess_nvme_health(health_info, cap)
                     self.finished.emit(("nvme", health_info, status))
+                    return
+                # 3) Стандартный NVMe IOCTL (может дать WMI fallback)
+                try:
+                    health_info = read_nvme_health_auto(dn)
+                    status = assess_nvme_health(health_info, cap)
+                    self.finished.emit(("nvme", health_info, status))
+                except Exception:
+                    self.finished.emit(("none", None, None))
             elif self.drive_info.smart_supported:
                 with DeviceHandle(self.drive_info.drive_number) as h:
                     attrs = read_smart_attributes(h, self.drive_info.drive_number)
-                    status = assess_ata_health(attrs)
+                    status = assess_ata_health(attrs, cap)
                     self.finished.emit(("ata", attrs, status))
             else:
                 self.finished.emit(("none", None, None))
@@ -67,6 +97,11 @@ class MainWindow(QMainWindow):
         self._drives: list[DriveInfo] = []
         self._worker_thread: QThread | None = None
         self._worker: _SmartWorker | None = None
+        # Для экспорта SMART
+        self._smart_data_type: str = "none"   # "ata", "nvme", "none"
+        self._smart_ata_attrs: list = []
+        self._smart_nvme_health: NvmeHealthInfo | None = None
+        self._smart_status: object = None  # HealthStatus
 
         self._setup_menu()
         self._setup_ui()
@@ -76,15 +111,29 @@ class MainWindow(QMainWindow):
         self._refresh_drives()
 
     def _setup_menu(self):
+        from ..i18n import save_language
         menu_bar = self.menuBar()
 
-        file_menu = menu_bar.addMenu("File")
-        file_menu.addAction("Refresh", self._refresh_drives, "F5")
+        file_menu = menu_bar.addMenu(tr("File", "Файл"))
+        file_menu.addAction(tr("Refresh", "Обновить"), self._refresh_drives, "F5")
+        self._export_action = file_menu.addAction(
+            tr("Export SMART...", "Экспорт SMART..."), self._export_smart,
+            QKeySequence("Ctrl+S"),
+        )
+        self._export_action.setEnabled(False)
+        file_menu.addAction(
+            tr("Export Benchmark...", "Экспорт бенчмарка..."),
+            self._export_benchmark, QKeySequence("Ctrl+B"),
+        )
         file_menu.addSeparator()
-        file_menu.addAction("Exit", self.close, "Alt+F4")
+        file_menu.addAction(tr("Exit", "Выход"), self.close, "Alt+F4")
 
-        help_menu = menu_bar.addMenu("Help")
-        help_menu.addAction("About", self._show_about)
+        lang_menu = menu_bar.addMenu("🌐 Language")
+        lang_menu.addAction("English", lambda: self._switch_language("en"))
+        lang_menu.addAction("Русский", lambda: self._switch_language("ru"))
+
+        help_menu = menu_bar.addMenu(tr("Help", "Справка"))
+        help_menu.addAction(tr("About", "О программе"), self._show_about)
 
     def _setup_ui(self):
         central = QWidget()
@@ -121,7 +170,7 @@ class MainWindow(QMainWindow):
         smart_layout.setSpacing(4)
 
         self._smart_table = SmartTableWidget()
-        self._attr_desc = QLabel("Select an attribute to see its description")
+        self._attr_desc = QLabel(tr("Select an attribute to see its description", "Выберите атрибут для просмотра описания"))
         self._attr_desc.setWordWrap(True)
         self._attr_desc.setMinimumHeight(50)
         self._attr_desc.setTextFormat(Qt.TextFormat.RichText)
@@ -142,8 +191,8 @@ class MainWindow(QMainWindow):
         self._benchmark_panel = BenchmarkPanel()
         self._surface_panel = SurfaceScanPanel()
         self._tabs.addTab(smart_tab, "SMART")
-        self._tabs.addTab(self._benchmark_panel, "Benchmark")
-        self._tabs.addTab(self._surface_panel, "Surface Scan")
+        self._tabs.addTab(self._benchmark_panel, tr("Benchmark", "Тесты"))
+        self._tabs.addTab(self._surface_panel, tr("Surface Scan", "Поверхность"))
         main_layout.addWidget(self._tabs, stretch=1)
 
     def _setup_statusbar(self):
@@ -158,34 +207,34 @@ class MainWindow(QMainWindow):
 
         from ..utils.admin import is_admin
         if is_admin():
-            self._status_admin.setText("Admin: Yes")
+            self._status_admin.setText(tr("Admin: Yes", "Админ: Да"))
             self._status_admin.setStyleSheet("color: #a6e3a1;")
         else:
-            self._status_admin.setText("Admin: No")
+            self._status_admin.setText(tr("Admin: No", "Админ: Нет"))
             self._status_admin.setStyleSheet("color: #f38ba8;")
 
     def _refresh_drives(self):
         """Перечитать список дисков."""
-        self._statusbar.showMessage("Scanning drives...", 3000)
+        self._statusbar.showMessage(tr("Scanning drives...", "Поиск дисков..."), 3000)
         self._info_panel.clear()
         self._health_indicator.clear()
-        self._smart_table.show_message("Scanning...")
+        self._smart_table.show_message(tr("Scanning...", "Поиск..."))
         self._benchmark_panel.clear()
         self._surface_panel.clear()
 
         try:
             self._drives = enumerate_drives()
             self._drive_selector.set_drives(self._drives)
-            self._status_drives.setText(f"Drives: {len(self._drives)} detected")
+            self._status_drives.setText(f"{tr("Drives", "Дисков")}: {len(self._drives)}")
             if not self._drives:
-                self._smart_table.show_message("No drives detected. Run as Administrator.")
-                self._statusbar.showMessage("No drives found", 5000)
+                self._smart_table.show_message(tr("No drives found. Run as Administrator.", "Диски не найдены. Запустите от Администратора."))
+                self._statusbar.showMessage(tr("No drives found", "Диски не найдены"), 5000)
             else:
-                self._statusbar.showMessage(f"Found {len(self._drives)} drive(s)", 3000)
+                self._statusbar.showMessage(tr("Found", "Найдено") + f" {len(self._drives)} " + tr("drive(s)", "дисков"), 3000)
         except Exception as e:
             logger.exception("Drive enumeration error")
-            self._smart_table.show_message(f"Error: {e}")
-            self._statusbar.showMessage(f"Error: {e}", 5000)
+            self._smart_table.show_message(f"{tr("Error", "Ошибка")}: {e}")
+            self._statusbar.showMessage(f"{tr("Error", "Ошибка")}: {e}", 5000)
 
     def _on_drive_selected(self, index: int):
         """Обработчик выбора диска."""
@@ -195,10 +244,12 @@ class MainWindow(QMainWindow):
         drive = self._drives[index]
         self._info_panel.set_drive_info(drive)
         self._health_indicator.clear()
-        self._smart_table.show_message("Reading SMART data...")
-        self._benchmark_panel.set_drive(drive.drive_number, drive.capacity_bytes)
-        self._surface_panel.set_drive(drive.drive_number, drive.capacity_bytes)
-        self._statusbar.showMessage(f"Reading SMART data for {drive.model.strip()}...", 10000)
+        self._smart_table.show_message(tr("Reading SMART...", "Чтение SMART..."))
+        self._benchmark_panel.set_drive(drive.drive_number, drive.capacity_bytes,
+                                       drive.interface_type.value, drive.model)
+        self._surface_panel.set_drive(drive.drive_number, drive.capacity_bytes,
+                                      drive.model)
+        self._statusbar.showMessage(f"{tr("Reading SMART", "Чтение SMART")}: {drive.model.strip()}...", 10000)
 
         # Запуск чтения SMART в фоновом потоке
         self._start_smart_read(drive)
@@ -228,6 +279,10 @@ class MainWindow(QMainWindow):
 
         if data_type == "ata":
             _, attrs, status = result
+            self._smart_data_type = "ata"
+            self._smart_ata_attrs = attrs
+            self._smart_status = status
+            self._export_action.setEnabled(True)
             self._smart_table.set_ata_attributes(attrs)
             self._health_indicator.set_status(status)
 
@@ -245,23 +300,35 @@ class MainWindow(QMainWindow):
 
         elif data_type == "nvme":
             _, health_info, status = result
+            self._smart_data_type = "nvme"
+            self._smart_nvme_health = health_info
+            self._smart_status = status
+            self._export_action.setEnabled(True)
             self._smart_table.set_nvme_health(health_info, status)
             self._health_indicator.set_status(status)
 
-            # Обновляем температуру из NVMe
+            # Обновляем температуру и тип из NVMe
             drive = self._drive_selector.get_selected_drive()
             if drive:
+                # USB-NVMe мост: обновляем данные, определённые при перечислении
+                if drive.interface_type == InterfaceType.USB:
+                    drive.smart_supported = True
+                    drive.smart_enabled = True
+                    drive.drive_type = DriveType.SSD
                 self._info_panel.set_drive_info(
                     drive, temperature=health_info.temperature_celsius
                 )
 
+            wmi_note = " (WMI fallback — limited data)" if health_info.wmi_fallback else ""
             self._statusbar.showMessage(
-                f"NVMe Health loaded — {status.summary}", 5000
+                f"NVMe Health loaded{wmi_note} — {status.summary}", 5000
             )
 
         elif data_type == "none":
-            self._smart_table.show_message("SMART not supported for this drive")
-            self._statusbar.showMessage("SMART not available", 3000)
+            self._smart_data_type = "none"
+            self._export_action.setEnabled(False)
+            self._smart_table.show_message(tr("SMART not supported for this drive", "SMART не поддерживается для этого диска"))
+            self._statusbar.showMessage(tr("SMART not available", "SMART недоступен"), 3000)
 
     def _on_attr_description(self, html: str):
         """Обновить панель описания атрибута."""
@@ -269,7 +336,7 @@ class MainWindow(QMainWindow):
             self._attr_desc.setText(html)
         else:
             self._attr_desc.setText(
-                '<span style="color: #585b70;">Select an attribute to see its description</span>'
+                '<span style="color: #585b70;">Выберите атрибут для просмотра описания</span>'
             )
 
     def _on_smart_error(self, error_msg: str):
@@ -289,10 +356,213 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(f"SMART error: {error_msg}", 5000)
         logger.error(f"SMART read error: {error_msg}")
 
+    def _export_benchmark(self):
+        """Экспорт результатов бенчмарка в текстовый файл."""
+        result = self._benchmark_panel._last_result
+        if not result:
+            QMessageBox.information(self, "Export", "Нет результатов бенчмарка.\nСначала запустите тест.")
+            return
+
+        drive = self._drive_selector.get_selected_drive()
+        if not drive:
+            return
+
+        safe_model = drive.model.replace(" ", "_").replace("/", "-")
+        default_name = f"Benchmark_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}.txt"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт бенчмарка", default_name,
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        lines = []
+        lines.append(f"{__app_name__} v{__version__} — Benchmark Report")
+        lines.append(f"Date: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        lines.append("=" * 60)
+        lines.append(f"Model:      {drive.model}")
+        lines.append(f"Serial:     {drive.serial_number}")
+        lines.append(f"Capacity:   {drive.capacity_bytes / (1024**3):.1f} GB")
+        lines.append(f"Interface:  {drive.interface_type.value}")
+        lines.append("=" * 60)
+
+        r = result
+        lines.append("")
+        lines.append(f"{'Test':<25} {'Result':>15} {'Details'}")
+        lines.append("-" * 60)
+
+        if r.sequential_speed_mbps > 0:
+            lines.append(f"{'Seq Read':<25} {r.sequential_speed_mbps:>12.1f} MB/s")
+        if r.seq_write_speed_mbps > 0:
+            lines.append(f"{'Seq Write':<25} {r.seq_write_speed_mbps:>12.1f} MB/s")
+        if r.random_reads_count > 0:
+            lines.append(f"{'Random 4K Read':<25} {r.random_iops:>12,.0f} IOPS"
+                         f"  Avg:{r.random_avg_latency_us:.0f} P95:{r.random_p95_latency_us:.0f} "
+                         f"P99:{r.random_p99_latency_us:.0f} μs")
+        if r.random_write_count > 0:
+            lines.append(f"{'Random 4K Write':<25} {r.random_write_iops:>12,.0f} IOPS"
+                         f"  Avg:{r.random_write_avg_latency_us:.0f} μs")
+        if r.mixed_count > 0:
+            lines.append(f"{'Mixed I/O 70/30':<25} {r.mixed_total_iops:>12,.0f} IOPS"
+                         f"  R:{r.mixed_read_iops:,.0f} W:{r.mixed_write_iops:,.0f}")
+        if r.verify_blocks_tested > 0:
+            status = "PASS" if r.verify_blocks_failed == 0 else f"FAIL ({r.verify_blocks_failed})"
+            lines.append(f"{'Write-Read-Verify':<25} {status:>15}"
+                         f"  {r.verify_blocks_tested} blocks, {r.verify_speed_mbps:.1f} MB/s")
+        if r.slc_cache_size_gb > 0:
+            lines.append(f"{'SLC Cache Size':<25} {r.slc_cache_size_gb:>12.1f} GB"
+                         f"  SLC:{r.slc_speed_mbps:.0f} Post:{r.slc_post_cache_speed_mbps:.0f} MB/s")
+        elif r.slc_speed_mbps > 0:
+            lines.append(f"{'SLC Cache':<25} {'No cliff':>15}"
+                         f"  Speed:{r.slc_speed_mbps:.0f} MB/s")
+
+        if r.temp_log:
+            lines.append("")
+            lines.append(f"Temperature: {r.temp_log[0][1]:.0f}°C (start) → "
+                         f"{r.temp_log[-1][1]:.0f}°C (end), "
+                         f"max {max(t for _, t in r.temp_log):.0f}°C")
+
+        lines.append("")
+        lines.append(f"Generated by {__app_name__} v{__version__}")
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            self._statusbar.showMessage(f"{tr('Benchmark exported:', 'Бенчмарк экспортирован:')} {path}", 5000)
+        except OSError as e:
+            QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось записать файл:\n{e}")
+
+    def _export_smart(self):
+        """Экспорт SMART данных в текстовый файл."""
+        drive = self._drive_selector.get_selected_drive()
+        if not drive:
+            return
+
+        # Имя файла по умолчанию
+        safe_model = drive.model.replace(" ", "_").replace("/", "-")
+        default_name = f"SMART_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}.txt"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт SMART", default_name,
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+
+        lines = []
+        lines.append(f"{__app_name__} v{__version__} — SMART Report")
+        lines.append(f"Date: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        lines.append("=" * 70)
+        lines.append(f"Model:      {drive.model}")
+        lines.append(f"Serial:     {drive.serial_number}")
+        lines.append(f"Firmware:   {drive.firmware_revision}")
+        lines.append(f"Capacity:   {drive.capacity_bytes / (1024**3):.1f} GB")
+        lines.append(f"Interface:  {drive.interface_type.value}")
+        lines.append(f"Type:       {drive.drive_type.value}")
+        lines.append("=" * 70)
+
+        # Оценка здоровья
+        if self._smart_status:
+            s = self._smart_status
+            level = s.level.value.upper()
+            lines.append(f"\nHealth:     {level} — {s.summary}")
+            if s.health_score >= 0:
+                lines.append(f"Score:      {s.health_score}/100")
+            if s.tbw_consumed_tb > 0:
+                lines.append(f"TBW used:   {s.tbw_consumed_tb:.1f} TB")
+            if s.tbw_rated_tb > 0:
+                lines.append(f"TBW rated:  ~{s.tbw_rated_tb:.0f} TB (оценка)")
+            if s.tbw_remaining_days > 0:
+                years = s.tbw_remaining_days / 365
+                if years > 100:
+                    lines.append("Прогноз:    > 100 лет")
+                else:
+                    lines.append(f"Прогноз:    ~{years:.1f} лет ({s.tbw_remaining_days} дней)")
+            if s.daily_write_tb > 0:
+                lines.append(f"Запись/день: {s.daily_write_tb * 1024:.1f} GB/день")
+            if s.waf > 0:
+                lines.append(f"WAF:        {s.waf:.2f}")
+            for w in s.warnings:
+                lines.append(f"  [!] {w}")
+            for c in s.critical_issues:
+                lines.append(f"  [!!!] {c}")
+
+        if self._smart_data_type == "ata":
+            lines.append("")
+            lines.append(f"{'ID':<5} {'Attribute':<30} {'Cur':>5} {'Wst':>5} "
+                         f"{'Thr':>5} {'Raw Value':>16}  {'Status'}")
+            lines.append("-" * 85)
+            for a in self._smart_ata_attrs:
+                status = "OK" if a.health_level == HealthLevel.GOOD else (
+                    "WARN" if a.health_level == HealthLevel.WARNING else
+                    "CRIT" if a.health_level == HealthLevel.CRITICAL else "—"
+                )
+                lines.append(
+                    f"{a.id:<5} {a.name:<30} {a.current:>5} {a.worst:>5} "
+                    f"{a.threshold:>5} {a.raw_value:>16,}  {status}"
+                )
+
+        elif self._smart_data_type == "nvme":
+            h = self._smart_nvme_health
+            lines.append("")
+            lines.append(f"{'Parameter':<40} {'Value':>20}")
+            lines.append("-" * 62)
+
+            nvme_rows = [
+                ("critical_warning", h.critical_warning),
+                ("temperature_celsius", h.temperature_celsius),
+                ("available_spare", h.available_spare),
+                ("available_spare_threshold", h.available_spare_threshold),
+                ("percentage_used", h.percentage_used),
+                ("data_units_read", h.data_units_read),
+                ("data_units_written", h.data_units_written),
+                ("host_read_commands", h.host_read_commands),
+                ("host_write_commands", h.host_write_commands),
+                ("controller_busy_time", h.controller_busy_time),
+                ("power_cycles", h.power_cycles),
+                ("power_on_hours", h.power_on_hours),
+                ("unsafe_shutdowns", h.unsafe_shutdowns),
+                ("media_errors", h.media_errors),
+                ("error_log_entries", h.error_log_entries),
+                ("warning_temp_time", h.warning_temp_time),
+                ("critical_temp_time", h.critical_temp_time),
+            ]
+            for key, val in nvme_rows:
+                fi = NVME_HEALTH_FIELDS.get(key)
+                name = fi.name if fi else key
+                unit = f" {fi.unit}" if fi and fi.unit else ""
+                lines.append(f"{name:<40} {val:>18,}{unit}")
+
+            if h.wmi_fallback:
+                lines.append("")
+                lines.append("(!) Data source: WMI fallback — limited data")
+
+        lines.append("")
+        lines.append(f"Generated by {__app_name__} v{__version__}")
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            self._statusbar.showMessage(f"{tr('SMART exported:', 'SMART экспортирован:')} {path}", 5000)
+        except OSError as e:
+            QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось записать файл:\n{e}")
+
+    def _switch_language(self, lang: str):
+        from ..i18n import save_language, get_language
+        if lang == get_language():
+            return
+        save_language(lang)
+        QMessageBox.information(
+            self, "Language / Язык",
+            "Language changed. Please restart the application.\n"
+            "Язык изменён. Перезапустите программу.",
+        )
+
     def _show_about(self):
         QMessageBox.about(
             self,
-            f"About {__app_name__}",
+            f"{tr("About", "О программе")} {__app_name__}",
             f"<h3>{__app_name__} v{__version__}</h3>"
             f"<p>Диагностика SSD и HDD дисков</p>"
             f"<p>Windows SMART & NVMe Health Monitor</p>"

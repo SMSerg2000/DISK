@@ -50,15 +50,14 @@ QMenu::item:selected {
     background-color: #313244;
 }
 
-/* ===== ComboBox (Drive Selector) ===== */
+/* ===== ComboBox ===== */
 QComboBox {
     background-color: #313244;
     color: #cdd6f4;
     border: 1px solid #45475a;
-    border-radius: 6px;
-    padding: 6px 12px;
-    min-width: 500px;
-    font-size: 14px;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 13px;
 }
 QComboBox:hover {
     border-color: #89b4fa;
@@ -72,6 +71,22 @@ QComboBox QAbstractItemView {
     color: #cdd6f4;
     selection-background-color: #313244;
     border: 1px solid #45475a;
+}
+
+/* ===== LineEdit ===== */
+QLineEdit {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+QLineEdit:hover {
+    border-color: #89b4fa;
+}
+QLineEdit:focus {
+    border-color: #89b4fa;
 }
 
 /* ===== Push Buttons ===== */

@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QComboBox, QPushButton
 from PySide6.QtCore import Signal
 
 from ..core.models import DriveInfo
+from ..i18n import tr
 
 
 class DriveSelector(QWidget):
@@ -23,7 +24,7 @@ class DriveSelector(QWidget):
         self._combo.setMinimumWidth(500)
         self._combo.currentIndexChanged.connect(self._on_index_changed)
 
-        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn = QPushButton(tr("Refresh", "Обновить"))
         self._refresh_btn.setFixedWidth(90)
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
 

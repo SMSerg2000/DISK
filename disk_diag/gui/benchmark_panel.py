@@ -1,16 +1,19 @@
-"""Панель бенчмарка: последовательное чтение, случайное 4K, scatter plot латентности."""
+"""Панель бенчмарка: чтение, запись, SLC-кэш тест, scatter plot латентности."""
 
 import logging
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QPushButton, QProgressBar, QLabel,
+    QPushButton, QProgressBar, QLabel, QCheckBox, QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QRectF, QPointF
 from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen
 
 from ..core.benchmark import BenchmarkEngine
 from ..core.models import BenchmarkResult
+from ..i18n import tr
+
+# noinspection PyUnresolvedReferences — used in _on_finished for SLC_MAX_GB
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +29,11 @@ class _BenchmarkWorker(QObject):
     finished = Signal(object)            # BenchmarkResult
     error = Signal(str)
 
-    def __init__(self, drive_number: int, capacity_bytes: int):
+    def __init__(self, drive_number: int, capacity_bytes: int,
+                 include_write: bool = False, interface_type: str = ""):
         super().__init__()
-        self._engine = BenchmarkEngine(drive_number, capacity_bytes)
+        self._engine = BenchmarkEngine(drive_number, capacity_bytes,
+                                       include_write, interface_type)
 
     def run(self):
         try:
@@ -42,6 +47,201 @@ class _BenchmarkWorker(QObject):
 
     def cancel(self):
         self._engine.cancel()
+
+
+# ---------------------------------------------------------------------------
+#  Line Chart Widget (SLC Cache / Drive Sweep)
+# ---------------------------------------------------------------------------
+
+class LineChartWidget(QWidget):
+    """Универсальный line chart: speed (MB/s) vs position/volume (GB)."""
+
+    def __init__(self, title: str = "", x_label: str = "GB",
+                 y_label: str = "MB/s", parent=None):
+        super().__init__(parent)
+        self._points: list[tuple[float, float]] = []
+        self._title = title
+        self._x_label = x_label
+        self._y_label = y_label
+        self.setMinimumHeight(150)
+
+    def set_points(self, points: list[tuple[float, float]]):
+        self._points = points
+        self.update()
+
+    def clear(self):
+        self._points.clear()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        rect = self.rect()
+        painter.fillRect(rect, QColor(30, 30, 46))
+
+        font = QFont("Segoe UI", 9)
+        painter.setFont(font)
+
+        margin_l, margin_r, margin_t, margin_b = 55, 15, 25, 30
+        plot = QRectF(margin_l, margin_t,
+                      rect.width() - margin_l - margin_r,
+                      rect.height() - margin_t - margin_b)
+        pw, ph = plot.width(), plot.height()
+
+        # Title
+        if self._title:
+            painter.setPen(QColor(205, 214, 244))
+            painter.drawText(QRectF(0, 2, rect.width(), 20),
+                             Qt.AlignmentFlag.AlignCenter, self._title)
+
+        # Axes
+        painter.setPen(QPen(QColor(88, 91, 112), 1))
+        painter.drawLine(int(plot.left()), int(plot.bottom()),
+                         int(plot.right()), int(plot.bottom()))
+        painter.drawLine(int(plot.left()), int(plot.top()),
+                         int(plot.left()), int(plot.bottom()))
+
+        if not self._points or len(self._points) < 2:
+            painter.setPen(QColor(88, 91, 112))
+            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, tr("No data", "Нет данных"))
+            painter.end()
+            return
+
+        max_x = max(p[0] for p in self._points)
+        max_y = max(p[1] for p in self._points) * 1.1
+        if max_x <= 0 or max_y <= 0:
+            painter.end()
+            return
+
+        # Y-axis labels
+        painter.setPen(QColor(166, 173, 200))
+        for i in range(5):
+            y_val = max_y * i / 4
+            y = plot.bottom() - (i / 4) * ph
+            painter.drawText(QRectF(0, y - 8, margin_l - 5, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             f"{y_val:.0f}")
+
+        # X-axis labels
+        for i in range(5):
+            x_val = max_x * i / 4
+            x = plot.left() + (i / 4) * pw
+            painter.drawText(QRectF(x - 20, plot.bottom() + 2, 40, 16),
+                             Qt.AlignmentFlag.AlignCenter, f"{x_val:.0f}")
+
+        # Line
+        painter.setPen(QPen(QColor(137, 180, 250), 2))  # blue
+        prev = None
+        for x_val, y_val in self._points:
+            x = plot.left() + (x_val / max_x) * pw
+            y = plot.bottom() - (y_val / max_y) * ph
+            y = max(plot.top(), min(plot.bottom(), y))
+            if prev:
+                painter.drawLine(int(prev[0]), int(prev[1]), int(x), int(y))
+            prev = (x, y)
+
+        painter.end()
+
+
+# ---------------------------------------------------------------------------
+#  Latency Histogram Widget
+# ---------------------------------------------------------------------------
+
+class LatencyHistogramWidget(QWidget):
+    """Гистограмма распределения латентности (Random 4K Read)."""
+
+    BINS = [
+        (0, 50, "0-50"),
+        (50, 100, "50-100"),
+        (100, 200, "100-200"),
+        (200, 500, "200-500"),
+        (500, 1000, "500-1K"),
+        (1000, float('inf'), ">1K"),
+    ]
+    BIN_COLORS = [
+        QColor(166, 227, 161),   # green
+        QColor(148, 226, 213),   # teal
+        QColor(249, 226, 175),   # yellow
+        QColor(250, 179, 135),   # peach
+        QColor(243, 139, 168),   # red
+        QColor(235, 160, 172),   # maroon
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._counts: list[int] = []
+        self._total = 0
+        self.setMinimumHeight(150)
+
+    def set_latencies(self, latencies_us: list[float]):
+        self._counts = [0] * len(self.BINS)
+        for lat in latencies_us:
+            for i, (lo, hi, _) in enumerate(self.BINS):
+                if lo <= lat < hi:
+                    self._counts[i] += 1
+                    break
+        self._total = len(latencies_us)
+        self.update()
+
+    def clear(self):
+        self._counts.clear()
+        self._total = 0
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        rect = self.rect()
+        painter.fillRect(rect, QColor(30, 30, 46))
+
+        font = QFont("Segoe UI", 9)
+        painter.setFont(font)
+
+        margin_l, margin_r, margin_t, margin_b = 45, 10, 20, 30
+        plot = QRectF(margin_l, margin_t,
+                      rect.width() - margin_l - margin_r,
+                      rect.height() - margin_t - margin_b)
+
+        # Title
+        painter.setPen(QColor(205, 214, 244))
+        painter.drawText(QRectF(0, 2, rect.width(), 16),
+                         Qt.AlignmentFlag.AlignCenter, tr("Latency Distribution (μs)", "Распределение задержек (мкс)"))
+
+        if not self._counts or self._total == 0:
+            painter.setPen(QColor(88, 91, 112))
+            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, tr("No data", "Нет данных"))
+            painter.end()
+            return
+
+        max_count = max(self._counts) if self._counts else 1
+        n_bins = len(self.BINS)
+        bar_w = plot.width() / n_bins * 0.8
+        gap = plot.width() / n_bins * 0.2
+
+        for i, (count, (lo, hi, label)) in enumerate(zip(self._counts, self.BINS)):
+            x = plot.left() + i * (bar_w + gap)
+            if max_count > 0:
+                h = (count / max_count) * plot.height()
+            else:
+                h = 0
+            y = plot.bottom() - h
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.BIN_COLORS[i])
+            painter.drawRect(QRectF(x, y, bar_w, h))
+
+            # Label
+            painter.setPen(QColor(166, 173, 200))
+            painter.drawText(QRectF(x, plot.bottom() + 2, bar_w, 16),
+                             Qt.AlignmentFlag.AlignCenter, label)
+
+            # Count
+            if count > 0:
+                pct = count / self._total * 100
+                painter.setPen(QColor(205, 214, 244))
+                painter.drawText(QRectF(x, y - 14, bar_w, 14),
+                                 Qt.AlignmentFlag.AlignCenter,
+                                 f"{pct:.0f}%")
+
+        painter.end()
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +341,7 @@ class LatencyScatterWidget(QWidget):
         painter.drawText(
             QRectF(plot.left(), plot.bottom() + 22, pw, 16),
             Qt.AlignmentFlag.AlignCenter,
-            "Disk Position (GB)",
+            tr("Disk Position (GB)", "Позиция на диске (ГБ)"),
         )
 
         # --- No data ---
@@ -152,7 +352,7 @@ class LatencyScatterWidget(QWidget):
             painter.drawText(
                 plot,
                 Qt.AlignmentFlag.AlignCenter,
-                "Run benchmark to see latency distribution",
+                tr("Run benchmark to see chart", "Запустите тест для отображения графика"),
             )
             painter.end()
             return
@@ -227,6 +427,9 @@ class BenchmarkPanel(QWidget):
         super().__init__(parent)
         self._drive_number: int | None = None
         self._capacity_bytes: int = 0
+        self._interface_type: str = ""
+        self._model: str = ""
+        self._last_result: BenchmarkResult | None = None
         self._worker: _BenchmarkWorker | None = None
         self._thread: QThread | None = None
 
@@ -242,26 +445,34 @@ class BenchmarkPanel(QWidget):
         controls = QHBoxLayout()
         controls.setSpacing(8)
 
-        self._btn_start = QPushButton("▶  Start Benchmark")
+        self._btn_start = QPushButton(tr("▶  Start Benchmark", "▶  Запустить тест"))
         self._btn_start.setFixedHeight(36)
         self._btn_start.setEnabled(False)
         self._btn_start.clicked.connect(self._start_benchmark)
 
-        self._btn_stop = QPushButton("■  Stop")
+        self._btn_stop = QPushButton(tr("■  Stop", "■  Стоп"))
         self._btn_stop.setFixedHeight(36)
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._stop_benchmark)
+
+        self._write_check = QCheckBox(tr("+ Write tests", "+ Тесты записи"))
+        self._write_check.setToolTip(
+            "Добавить тесты записи: Sequential Write + SLC Cache.\n"
+            "⚠️ ДЕСТРУКТИВНО — все данные на диске будут уничтожены!"
+        )
+        self._write_check.setStyleSheet("color: #f38ba8;")
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._progress.setFixedHeight(24)
 
-        self._status = QLabel("Select a drive")
+        self._status = QLabel(tr("Select a drive", "Выберите диск"))
         self._status.setStyleSheet("color: #a6adc8;")
 
         controls.addWidget(self._btn_start)
         controls.addWidget(self._btn_stop)
+        controls.addWidget(self._write_check)
         controls.addWidget(self._progress, stretch=1)
         controls.addWidget(self._status)
         layout.addLayout(controls)
@@ -270,25 +481,47 @@ class BenchmarkPanel(QWidget):
         results = QHBoxLayout()
         results.setSpacing(10)
 
-        self._seq_card = _ResultCard("Sequential Read")
-        self._rnd_card = _ResultCard("Random 4K Read")
+        self._seq_card = _ResultCard(tr("Seq Read", "Послед. чтение"))
+        self._seq_write_card = _ResultCard(tr("Seq Write", "Послед. запись"))
+        self._rnd_card = _ResultCard(tr("4K Read", "4K чтение"))
+        self._rnd_write_card = _ResultCard(tr("4K Write", "4K запись"))
+        self._mixed_card = _ResultCard(tr("Mixed 70/30", "Микс 70/30"))
+        self._verify_card = _ResultCard(tr("Verify", "Проверка"))
+        self._slc_card = _ResultCard(tr("SLC Cache", "SLC кэш"))
         results.addWidget(self._seq_card)
+        results.addWidget(self._seq_write_card)
         results.addWidget(self._rnd_card)
+        results.addWidget(self._rnd_write_card)
+        results.addWidget(self._mixed_card)
+        results.addWidget(self._verify_card)
+        results.addWidget(self._slc_card)
         layout.addLayout(results)
 
-        # --- Scatter plot ---
+        # --- Charts (tabbed) ---
+        from PySide6.QtWidgets import QTabWidget
+        self._chart_tabs = QTabWidget()
         self._scatter = LatencyScatterWidget()
-        layout.addWidget(self._scatter, stretch=1)
+        self._histogram = LatencyHistogramWidget()
+        self._sweep_chart = LineChartWidget("Drive Read Sweep", "Position (GB)", "MB/s")
+        self._slc_chart = LineChartWidget("SLC Cache Write", "Written (GB)", "MB/s")
+        self._chart_tabs.addTab(self._scatter, tr("Latency Scatter", "Задержки (точки)"))
+        self._chart_tabs.addTab(self._histogram, tr("Latency Histogram", "Гистограмма задержек"))
+        self._chart_tabs.addTab(self._sweep_chart, tr("Drive Sweep", "Чтение по позициям"))
+        self._chart_tabs.addTab(self._slc_chart, "SLC кэш")
+        layout.addWidget(self._chart_tabs, stretch=1)
 
     # --- Public API ---
 
-    def set_drive(self, drive_number: int, capacity_bytes: int):
+    def set_drive(self, drive_number: int, capacity_bytes: int,
+                  interface_type: str = "", model: str = ""):
         """Установить диск для бенчмарка."""
         self.stop()
         self._drive_number = drive_number
+        self._interface_type = interface_type
         self._capacity_bytes = capacity_bytes
+        self._model = model
         self._btn_start.setEnabled(True)
-        self._status.setText("Ready")
+        self._status.setText(tr("Ready", "Готов"))
         self._status.setStyleSheet("color: #a6adc8;")
         self._clear_results()
 
@@ -298,7 +531,7 @@ class BenchmarkPanel(QWidget):
         self._drive_number = None
         self._capacity_bytes = 0
         self._btn_start.setEnabled(False)
-        self._status.setText("Select a drive")
+        self._status.setText(tr("Select a drive", "Выберите диск"))
         self._status.setStyleSheet("color: #a6adc8;")
         self._clear_results()
 
@@ -318,21 +551,80 @@ class BenchmarkPanel(QWidget):
 
     def _clear_results(self):
         self._seq_card.clear()
+        self._seq_write_card.clear()
         self._rnd_card.clear()
+        self._rnd_write_card.clear()
+        self._mixed_card.clear()
+        self._verify_card.clear()
+        self._slc_card.clear()
         self._scatter.clear()
+        self._histogram.clear()
+        self._sweep_chart.clear()
+        self._slc_chart.clear()
         self._progress.setValue(0)
 
     def _start_benchmark(self):
         if self._drive_number is None:
             return
 
+        include_write = self._write_check.isChecked()
+
+        if include_write:
+            size_gb = self._capacity_bytes / (1024 ** 3)
+            reply = QMessageBox.warning(
+                self, tr("Benchmark — Write Tests", "Бенчмарк — Тесты записи"),
+                tr(
+                    f"⚠️ Write tests will DESTROY ALL DATA on the disk!\n\n"
+                    f"Disk: {self._model.strip()} ({size_gb:.1f} GB)\n\n"
+                    f"Sequential Write: 512 MB\n"
+                    f"Random 4K Write + Mixed I/O + Verify\n"
+                    f"SLC Cache: up to 50 GB\n\n"
+                    f"ARE YOU SURE?",
+                    f"⚠️ Тесты записи УНИЧТОЖАТ ВСЕ ДАННЫЕ на диске!\n\n"
+                    f"Диск: {self._model.strip()} ({size_gb:.1f} GB)\n\n"
+                    f"Sequential Write: запись 512 MB\n"
+                    f"Random 4K Write + Mixed I/O + Verify\n"
+                    f"SLC Cache: запись до 50 GB\n\n"
+                    f"ВЫ УВЕРЕНЫ?",
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            # Двойная защита для системного диска
+            from ..core.winapi import is_system_drive
+            if is_system_drive(self._drive_number):
+                reply2 = QMessageBox.critical(
+                    self, tr("⚠️ SYSTEM DISK!", "⚠️ СИСТЕМНЫЙ ДИСК!"),
+                    tr(
+                        f"THIS IS THE SYSTEM DISK (contains Windows)!\n"
+                        f"Disk: {self._model.strip()}\n\n"
+                        f"Write tests will make the computer unbootable!\n"
+                        f"You will lose ALL programs and data!\n\n"
+                        f"DO YOU REALLY WANT TO CONTINUE?",
+                        f"ЭТО СИСТЕМНЫЙ ДИСК (содержит Windows)!\n"
+                        f"Диск: {self._model.strip()}\n\n"
+                        f"Тесты записи сделают компьютер незагружаемым!\n"
+                        f"Вы потеряете ВСЕ программы и данные!\n\n"
+                        f"ВЫ ДЕЙСТВИТЕЛЬНО ХОТИТЕ ПРОДОЛЖИТЬ?",
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply2 != QMessageBox.StandardButton.Yes:
+                    return
+
         self._clear_results()
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
-        self._status.setText("Running...")
+        self._write_check.setEnabled(False)
+        self._status.setText(tr("Running...", "Выполняется..."))
         self._status.setStyleSheet("color: #cdd6f4;")
 
-        self._worker = _BenchmarkWorker(self._drive_number, self._capacity_bytes)
+        self._worker = _BenchmarkWorker(self._drive_number, self._capacity_bytes,
+                                        include_write, self._interface_type)
         self._thread = QThread()
         self._worker.moveToThread(self._thread)
 
@@ -347,25 +639,42 @@ class BenchmarkPanel(QWidget):
 
     def _stop_benchmark(self):
         self.stop()
-        self._status.setText("Cancelled")
+        self._status.setText(tr("Cancelled", "Отменено"))
         self._status.setStyleSheet("color: #f9e2af;")
 
     def _on_progress(self, phase: str, pct: float, message: str):
-        # Sequential = 0..50%, Random = 50..100%
-        overall = pct * 50 if phase == "sequential" else 50 + pct * 50
+        if self._write_check.isChecked():
+            phase_map = {
+                "sequential": (0, 8, "Seq Read"),
+                "random":     (8, 8, "4K Read"),
+                "sweep":      (16, 14, tr("Drive Sweep", "Чтение по позициям")),
+                "seq_write":  (30, 8, "Seq Write"),
+                "rnd_write":  (38, 8, "4K Write"),
+                "mixed":      (46, 8, "Mixed 70/30"),
+                "verify":     (54, 10, "Verify"),
+                "slc_cache":  (64, 36, "SLC кэш"),
+            }
+        else:
+            phase_map = {
+                "sequential": (0, 15, "Seq Read"),
+                "random":     (15, 15, "4K Read"),
+                "sweep":      (30, 70, tr("Drive Sweep", "Чтение по позициям")),
+            }
+        base, span, name = phase_map.get(phase, (0, 100, phase))
+        overall = base + pct * span
         self._progress.setValue(int(overall))
-
-        phase_name = "Sequential" if phase == "sequential" else "Random 4K"
-        self._status.setText(f"{phase_name}: {message}")
+        self._status.setText(f"{name}: {message}")
 
     def _on_finished(self, result: BenchmarkResult):
+        self._last_result = result
         self._progress.setValue(100)
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
-        self._status.setText("Done!")
+        self._write_check.setEnabled(True)
+        self._status.setText(tr("Done!", "Готово!"))
         self._status.setStyleSheet("color: #a6e3a1;")
 
-        # Sequential
+        # Sequential Read
         if result.sequential_speed_mbps > 0:
             mb = result.sequential_bytes_read / (1024 * 1024)
             self._seq_card.set_result(
@@ -373,21 +682,81 @@ class BenchmarkPanel(QWidget):
                 f"{mb:.0f} MB read in {result.sequential_time_sec:.2f}s",
             )
 
-        # Random 4K
+        # Sequential Write
+        if result.seq_write_speed_mbps > 0:
+            mb = result.seq_write_bytes / (1024 * 1024)
+            self._seq_write_card.set_result(
+                f"{result.seq_write_speed_mbps:.1f} MB/s",
+                f"{mb:.0f} MB written in {result.seq_write_time_sec:.2f}s",
+            )
+
+        # Random 4K Read
         if result.random_reads_count > 0:
             self._rnd_card.set_result(
                 f"{result.random_iops:,.0f} IOPS",
                 f"Avg: {result.random_avg_latency_us:.1f} μs\n"
-                f"Min: {result.random_min_latency_us:.1f} μs  /  "
-                f"Max: {result.random_max_latency_us:.1f} μs",
+                f"P95: {result.random_p95_latency_us:.0f}  /  "
+                f"P99: {result.random_p99_latency_us:.0f} μs",
             )
 
-        # Scatter
+        # Random 4K Write
+        if result.random_write_count > 0:
+            self._rnd_write_card.set_result(
+                f"{result.random_write_iops:,.0f} IOPS",
+                f"Avg: {result.random_write_avg_latency_us:.1f} μs",
+            )
+
+        # Mixed I/O
+        if result.mixed_count > 0:
+            self._mixed_card.set_result(
+                f"{result.mixed_total_iops:,.0f} IOPS",
+                f"R: {result.mixed_read_iops:,.0f}  /  "
+                f"W: {result.mixed_write_iops:,.0f}",
+            )
+
+        # Write-Read-Verify
+        if result.verify_blocks_tested > 0:
+            if result.verify_blocks_failed == 0:
+                self._verify_card.set_result(
+                    "✓ ОК",
+                    f"{result.verify_blocks_tested} blocks OK\n"
+                    f"{result.verify_speed_mbps:.1f} MB/s",
+                )
+            else:
+                self._verify_card.set_result(
+                    f"✗ {result.verify_blocks_failed} FAIL",
+                    f"{result.verify_blocks_ok} OK / "
+                    f"{result.verify_blocks_failed} corrupted!",
+                )
+
+        # SLC Cache
+        if result.slc_cache_size_gb > 0:
+            self._slc_card.set_result(
+                f"{result.slc_cache_size_gb:.1f} GB",
+                f"SLC: {result.slc_speed_mbps:.0f} MB/s\n"
+                f"Post-cache: {result.slc_post_cache_speed_mbps:.0f} MB/s",
+            )
+        elif result.slc_speed_mbps > 0:
+            self._slc_card.set_result(
+                f"Без падения",
+                f"Speed: {result.slc_speed_mbps:.0f} MB/s\n"
+                f"(SLC cache > {BenchmarkEngine.SLC_MAX_GB} GB or no cache)",
+            )
+
+        # Charts
         if result.latency_points:
             self._scatter.set_points(result.latency_points)
+            # Histogram from latencies
+            lats = [lat for _, lat in result.latency_points]
+            self._histogram.set_latencies(lats)
+        if result.sweep_points:
+            self._sweep_chart.set_points(result.sweep_points)
+        if result.slc_points:
+            self._slc_chart.set_points(result.slc_points)
 
     def _on_error(self, error_msg: str):
         self._btn_start.setEnabled(self._drive_number is not None)
         self._btn_stop.setEnabled(False)
-        self._status.setText(f"Error: {error_msg}")
+        self._write_check.setEnabled(True)
+        self._status.setText(f"{tr("Error", "Ошибка")}: {error_msg}")
         self._status.setStyleSheet("color: #f38ba8;")

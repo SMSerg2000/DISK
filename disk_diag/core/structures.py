@@ -163,6 +163,48 @@ class NVME_HEALTH_INFO_LOG(Structure):
 
 
 # ============================================================
+# ATA Pass-Through — нативное выравнивание (Windows API structure)
+# Используется для отправки ATA-команд через USB-SATA мосты
+# ============================================================
+
+class ATA_PASS_THROUGH_EX(Structure):
+    _fields_ = [
+        ("Length", c_ushort),
+        ("AtaFlags", c_ushort),
+        ("PathId", c_ubyte),
+        ("TargetId", c_ubyte),
+        ("Lun", c_ubyte),
+        ("ReservedAsUchar", c_ubyte),
+        ("DataTransferLength", c_ulong),
+        ("TimeOutValue", c_ulong),
+        ("ReservedAsUlong", c_ulong),
+        ("DataBufferOffset", ctypes.c_size_t),  # ULONG_PTR
+        ("PreviousTaskFile", c_ubyte * 8),
+        ("CurrentTaskFile", c_ubyte * 8),
+    ]
+
+
+class SCSI_PASS_THROUGH(Structure):
+    """SCSI Pass-Through — для отправки SCSI/SAT команд через USB мосты."""
+    _fields_ = [
+        ("Length", c_ushort),
+        ("ScsiStatus", c_ubyte),
+        ("PathId", c_ubyte),
+        ("TargetId", c_ubyte),
+        ("Lun", c_ubyte),
+        ("CdbLength", c_ubyte),
+        ("SenseInfoLength", c_ubyte),
+        ("DataIn", c_ubyte),
+        ("Padding", c_ubyte * 3),           # выравнивание до ULONG
+        ("DataTransferLength", c_ulong),
+        ("TimeOutValue", c_ulong),
+        ("DataBufferOffset", ctypes.c_size_t),  # ULONG_PTR
+        ("SenseInfoOffset", c_ulong),
+        ("Cdb", c_ubyte * 16),
+    ]
+
+
+# ============================================================
 # Disk Geometry — нативное выравнивание
 # ============================================================
 

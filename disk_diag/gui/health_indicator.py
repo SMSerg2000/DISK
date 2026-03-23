@@ -5,31 +5,32 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 from ..core.models import HealthStatus, HealthLevel
+from ..i18n import tr
 
 
 _STYLE_MAP = {
     HealthLevel.GOOD: {
         "bg": "#a6e3a1",
         "fg": "#1e1e2e",
-        "text": "GOOD",
+        "text": tr("GOOD", "ХОРОШО"),
         "icon": "OK",
     },
     HealthLevel.WARNING: {
         "bg": "#f9e2af",
         "fg": "#1e1e2e",
-        "text": "WARNING",
+        "text": tr("WARNING", "ВНИМАНИЕ"),
         "icon": "!!",
     },
     HealthLevel.CRITICAL: {
         "bg": "#f38ba8",
         "fg": "#1e1e2e",
-        "text": "CRITICAL",
+        "text": tr("CRITICAL", "КРИТИЧНО"),
         "icon": "XX",
     },
     HealthLevel.UNKNOWN: {
         "bg": "#585b70",
         "fg": "#cdd6f4",
-        "text": "UNKNOWN",
+        "text": tr("UNKNOWN", "НЕ ОПРЕДЕЛЕНО"),
         "icon": "??",
     },
 }
@@ -70,7 +71,27 @@ class HealthIndicator(QFrame):
 
     def set_status(self, status: HealthStatus):
         """Обновить отображение на основе HealthStatus."""
-        self._apply_style(status.level, status.summary)
+        extra_lines = []
+        if status.health_score >= 0:
+            extra_lines.append(f"Health Score: {status.health_score}/100")
+        # TBW и прогноз — только если диск не при смерти (score >= 30)
+        if status.health_score >= 30:
+            if status.tbw_consumed_tb > 0 and status.tbw_rated_tb > 0:
+                pct = status.tbw_consumed_tb / status.tbw_rated_tb * 100
+                extra_lines.append(f"TBW: {status.tbw_consumed_tb:.1f} / ~{status.tbw_rated_tb:.0f} TB ({pct:.1f}%)")
+            if status.tbw_remaining_days > 0:
+                years = status.tbw_remaining_days / 365
+                lbl = tr("Forecast", "Прогноз")
+                if years > 100:
+                    extra_lines.append(f"{lbl}: > 100 {tr('years', 'лет')}")
+                elif years >= 1:
+                    extra_lines.append(f"{lbl}: ~{years:.1f} {tr('years', 'лет')}")
+                else:
+                    extra_lines.append(f"{lbl}: ~{status.tbw_remaining_days} {tr('days', 'дней')}")
+        summary = status.summary
+        if extra_lines:
+            summary += "\n" + "\n".join(extra_lines)
+        self._apply_style(status.level, summary)
 
     def clear(self):
         """Сбросить в состояние UNKNOWN."""

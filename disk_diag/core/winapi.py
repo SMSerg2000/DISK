@@ -3,6 +3,7 @@
 import ctypes
 import ctypes.wintypes as wintypes
 import logging
+import os
 
 from .constants import (
     GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
@@ -94,6 +95,17 @@ _ReadFile.argtypes = [
     ctypes.c_void_p,                    # lpOverlapped
 ]
 
+# --- WriteFile ---
+_WriteFile = kernel32.WriteFile
+_WriteFile.restype = wintypes.BOOL
+_WriteFile.argtypes = [
+    wintypes.HANDLE,                    # hFile
+    ctypes.c_void_p,                    # lpBuffer
+    wintypes.DWORD,                     # nNumberOfBytesToWrite
+    ctypes.POINTER(wintypes.DWORD),     # lpNumberOfBytesWritten
+    ctypes.c_void_p,                    # lpOverlapped
+]
+
 # --- SetFilePointerEx ---
 _SetFilePointerEx = kernel32.SetFilePointerEx
 _SetFilePointerEx.restype = wintypes.BOOL
@@ -170,14 +182,16 @@ class AlignedBuffer:
 class DeviceHandle:
     """Context manager для безопасного открытия/закрытия PhysicalDrive."""
 
-    def __init__(self, drive_number: int, read_only: bool = False, flags: int = 0):
+    def __init__(self, drive_number: int = -1, read_only: bool = False, flags: int = 0,
+                 device_path: str = ""):
         self.drive_number = drive_number
         self.read_only = read_only
         self.flags = flags
         self._handle = None
+        self._device_path = device_path  # если задан — используется вместо PhysicalDriveN
 
     def __enter__(self) -> "DeviceHandle":
-        path = f"\\\\.\\PhysicalDrive{self.drive_number}"
+        path = self._device_path or f"\\\\.\\PhysicalDrive{self.drive_number}"
         access = GENERIC_READ if self.read_only else (GENERIC_READ | GENERIC_WRITE)
         share = FILE_SHARE_READ | FILE_SHARE_WRITE
 
@@ -307,6 +321,31 @@ class DeviceHandle:
             )
         return bytes_read.value
 
+    def write(self, buffer_ptr, size: int) -> int:
+        """Записать данные с текущей позиции из буфера.
+
+        Args:
+            buffer_ptr: Указатель на буфер (c_void_p или AlignedBuffer.ptr)
+            size: Количество байт для записи
+
+        Returns:
+            Количество записанных байт
+        """
+        bytes_written = wintypes.DWORD(0)
+        result = _WriteFile(self._handle, buffer_ptr, size, ctypes.byref(bytes_written), None)
+        if not result:
+            error_code = _GetLastError()
+            error_msg = _get_error_message(error_code)
+            raise DiskAccessError(
+                f"WriteFile({size}) failed: error {error_code} ({error_msg})"
+            )
+        return bytes_written.value
+
+    def write_at(self, offset: int, buffer_ptr, size: int) -> int:
+        """Seek + Write: записать данные по абсолютному смещению."""
+        self.seek(offset)
+        return self.write(buffer_ptr, size)
+
     def read_at(self, offset: int, buffer_ptr, size: int) -> int:
         """Seek + Read: прочитать данные по абсолютному смещению.
 
@@ -354,3 +393,163 @@ class DeviceHandle:
             )
 
         return bytes(out_buffer[:bytes_returned.value])
+
+    def ioctl_inplace(
+        self,
+        ioctl_code: int,
+        buffer: bytearray,
+    ) -> int:
+        """DeviceIoControl с единым буфером для input и output.
+
+        Некоторые драйверы (особенно NVMe) ожидают один буфер.
+        Возвращает количество байт в ответе.
+        """
+        buf_size = len(buffer)
+        c_buf = (ctypes.c_ubyte * buf_size)(*buffer)
+        bytes_returned = wintypes.DWORD(0)
+
+        result = _DeviceIoControl(
+            self._handle,
+            ioctl_code,
+            ctypes.byref(c_buf),
+            buf_size,
+            ctypes.byref(c_buf),  # тот же буфер для output
+            buf_size,
+            ctypes.byref(bytes_returned),
+            None,
+        )
+
+        if not result:
+            error_code = _GetLastError()
+            error_msg = _get_error_message(error_code)
+            raise IoctlFailed(
+                f"IOCTL 0x{ioctl_code:08X}",
+                error_code,
+                error_msg,
+            )
+
+        # Копируем результат обратно в переданный bytearray
+        buffer[:] = bytes(c_buf)
+        return bytes_returned.value
+
+
+# --- Volume lock/dismount for write access ---
+
+FSCTL_LOCK_VOLUME = 0x00090018
+FSCTL_DISMOUNT_VOLUME = 0x00090020
+IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
+
+
+def is_system_drive(drive_number: int) -> bool:
+    """Проверить, является ли физический диск системным (содержит том C:)."""
+    import struct
+    sys_letter = os.environ.get("SystemDrive", "C:")[:1].upper()
+    vol_path = f"\\\\.\\{sys_letter}:"
+    try:
+        h = _CreateFileW(vol_path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         None, OPEN_EXISTING, 0, None)
+        handle_val = h if isinstance(h, int) else ctypes.cast(h, ctypes.c_void_p).value
+        if handle_val is None or handle_val == _INVALID_HANDLE:
+            return False
+    except Exception:
+        return False
+
+    try:
+        out_buf = (ctypes.c_ubyte * 32)()
+        bytes_ret = wintypes.DWORD(0)
+        ok = _DeviceIoControl(h, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                              None, 0, ctypes.byref(out_buf), 32,
+                              ctypes.byref(bytes_ret), None)
+        if ok and bytes_ret.value >= 12:
+            disk_num = struct.unpack_from("<I", bytes(out_buf), 8)[0]
+            return disk_num == drive_number
+        return False
+    except Exception:
+        return False
+    finally:
+        _CloseHandle(h)
+
+
+def lock_and_dismount_volumes(drive_number: int) -> list:
+    """Заблокировать и размонтировать все тома на указанном физическом диске.
+
+    Без этого Windows не позволяет писать в области смонтированных разделов.
+    Возвращает список открытых handle'ов томов (закрыть после записи!).
+    """
+    volume_handles = []
+
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        vol_path = f"\\\\.\\{letter}:"
+        try:
+            h = _CreateFileW(
+                vol_path,
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                0,
+                None,
+            )
+            handle_val = h if isinstance(h, int) else ctypes.cast(h, ctypes.c_void_p).value
+            if handle_val is None or handle_val == _INVALID_HANDLE:
+                continue
+        except Exception:
+            continue
+
+        # Проверяем, на каком физическом диске этот том
+        try:
+            # VOLUME_DISK_EXTENTS: disk_number at offset 8
+            out_buf = (ctypes.c_ubyte * 32)()
+            bytes_ret = wintypes.DWORD(0)
+            ok = _DeviceIoControl(
+                h,
+                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                None, 0,
+                ctypes.byref(out_buf), 32,
+                ctypes.byref(bytes_ret),
+                None,
+            )
+            if ok and bytes_ret.value >= 12:
+                # NumberOfDiskExtents at offset 0 (DWORD)
+                # First extent: DiskNumber at offset 8 (DWORD)
+                import struct
+                disk_num = struct.unpack_from("<I", bytes(out_buf), 8)[0]
+                if disk_num != drive_number:
+                    _CloseHandle(h)
+                    continue
+            else:
+                _CloseHandle(h)
+                continue
+        except Exception:
+            _CloseHandle(h)
+            continue
+
+        # Том на нашем диске — блокируем и размонтируем
+        dummy = wintypes.DWORD(0)
+
+        ok = _DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0,
+                              ctypes.byref(dummy), None)
+        if ok:
+            logger.info(f"Locked volume {letter}:")
+        else:
+            logger.warning(f"Failed to lock volume {letter}:")
+
+        ok = _DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
+                              ctypes.byref(dummy), None)
+        if ok:
+            logger.info(f"Dismounted volume {letter}:")
+        else:
+            logger.warning(f"Failed to dismount volume {letter}:")
+
+        volume_handles.append(h)
+
+    return volume_handles
+
+
+def unlock_volumes(handles: list):
+    """Закрыть handle'ы томов (снимает блокировку)."""
+    for h in handles:
+        try:
+            _CloseHandle(h)
+        except Exception:
+            pass

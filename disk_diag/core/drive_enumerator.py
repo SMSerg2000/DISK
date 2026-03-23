@@ -169,14 +169,28 @@ def enumerate_drives() -> list[DriveInfo]:
         try:
             # Сначала пробуем read-only — достаточно для перечисления
             with DeviceHandle(n, read_only=True) as h:
-                model, serial, firmware, bus_type = _get_device_descriptor(h)
+                # Descriptor — обёрнут отдельно, чтобы USB-диски с проблемным
+                # STORAGE_QUERY_PROPERTY не пропадали полностью
+                try:
+                    model, serial, firmware, bus_type = _get_device_descriptor(h)
+                except Exception as e:
+                    logger.warning(
+                        f"PhysicalDrive{n}: descriptor query failed ({e}), "
+                        f"using fallback values"
+                    )
+                    model, serial, firmware, bus_type = (
+                        f"PhysicalDrive{n}", "", "", 0
+                    )
+
                 capacity = _get_capacity(h)
                 interface = _bus_type_to_interface(bus_type)
 
-                # SMART support check (только для ATA/SATA дисков)
+                # SMART support check — пробуем для ATA/SATA/USB
+                # (некоторые USB-SATA мосты поддерживают SAT passthrough)
                 smart_supported = False
                 smart_enabled = False
-                if interface in (InterfaceType.SATA, InterfaceType.ATA):
+                if interface in (InterfaceType.SATA, InterfaceType.ATA,
+                                 InterfaceType.USB):
                     smart_supported, smart_enabled = _check_smart_support(h)
                 elif interface == InterfaceType.NVME:
                     smart_supported = True

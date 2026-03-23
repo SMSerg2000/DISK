@@ -12,8 +12,14 @@ from .constants import (
     SMART_READ_THRESHOLDS,
     SMART_ENABLE_OPERATIONS,
     SMART_CYL_LOW, SMART_CYL_HI,
+    IOCTL_ATA_PASS_THROUGH,
+    ATA_FLAGS_DRDY_REQUIRED, ATA_FLAGS_DATA_IN,
+    IOCTL_SCSI_PASS_THROUGH, SCSI_IOCTL_DATA_IN,
 )
-from .structures import SENDCMDINPARAMS, SENDCMDOUTPARAMS, IDEREGS
+from .structures import (
+    SENDCMDINPARAMS, SENDCMDOUTPARAMS, IDEREGS,
+    ATA_PASS_THROUGH_EX, SCSI_PASS_THROUGH,
+)
 from .winapi import DeviceHandle, IoctlFailed
 from .models import SmartAttribute, HealthLevel, DriveType
 from ..data.smart_db import get_attribute_name, is_critical_attribute, SSD_INDICATOR_ATTRS
@@ -133,6 +139,229 @@ def _parse_thresholds(data: bytes) -> dict[int, int]:
         offset += _ATTR_RECORD_SIZE
 
     return thresholds
+
+
+def _sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True) -> bytes:
+    """Отправить SMART-команду через ATA Pass-Through (для USB-SATA мостов).
+
+    Используется IOCTL_ATA_PASS_THROUGH вместо legacy SMART IOCTL.
+    USB-SATA мосты транслируют ATA-команды через SAT (SCSI-ATA Translation).
+
+    Args:
+        handle: Открытый DeviceHandle
+        feature: SMART sub-command (SMART_READ_ATTRIBUTES и т.д.)
+        data_in: True если ожидаем 512 байт данных в ответ
+
+    Returns:
+        512 байт SMART-данных (или пустой bytes для команд без данных)
+    """
+    header_size = ctypes.sizeof(ATA_PASS_THROUGH_EX)
+    data_size = 512 if data_in else 0
+    total_size = header_size + data_size
+
+    buf = bytearray(total_size)
+
+    # Заполняем ATA_PASS_THROUGH_EX через struct
+    # Offset 0: Length (ushort)
+    struct.pack_into("<H", buf, 0, header_size)
+    # Offset 2: AtaFlags (ushort)
+    flags = ATA_FLAGS_DRDY_REQUIRED
+    if data_in:
+        flags |= ATA_FLAGS_DATA_IN
+    struct.pack_into("<H", buf, 2, flags)
+    # Offset 4-7: PathId, TargetId, Lun, Reserved = 0 (уже нули)
+    # Offset 8: DataTransferLength (ulong)
+    struct.pack_into("<I", buf, 8, data_size)
+    # Offset 12: TimeOutValue (ulong) — 10 секунд
+    struct.pack_into("<I", buf, 12, 10)
+    # Offset 16: ReservedAsUlong = 0
+    # Offset 20 (x86) или 24 (x64): DataBufferOffset (ULONG_PTR)
+    dbo_offset = ATA_PASS_THROUGH_EX.DataBufferOffset.offset
+    ptr_size = ctypes.sizeof(ctypes.c_size_t)
+    if ptr_size == 8:
+        struct.pack_into("<Q", buf, dbo_offset, header_size)
+    else:
+        struct.pack_into("<I", buf, dbo_offset, header_size)
+
+    # CurrentTaskFile — offset в структуре
+    ctf_offset = ATA_PASS_THROUGH_EX.CurrentTaskFile.offset
+    buf[ctf_offset + 0] = feature          # Features (SMART sub-command)
+    buf[ctf_offset + 1] = 1                # Sector Count
+    buf[ctf_offset + 2] = 0                # LBA Low
+    buf[ctf_offset + 3] = SMART_CYL_LOW    # LBA Mid = 0x4F
+    buf[ctf_offset + 4] = SMART_CYL_HI     # LBA High = 0xC2
+    buf[ctf_offset + 5] = 0xA0             # Device/Head
+    buf[ctf_offset + 6] = ATA_SMART_CMD    # Command = 0xB0
+
+    result = handle.ioctl_raw(IOCTL_ATA_PASS_THROUGH, bytes(buf), total_size)
+
+    if data_in and len(result) >= header_size + 512:
+        return result[header_size:header_size + 512]
+    return b""
+
+
+def _scsi_sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True) -> bytes:
+    """Отправить SMART-команду через SCSI Pass-Through с SAT CDB.
+
+    Использует ATA Pass-Through (16) CDB (opcode 0x85) поверх
+    IOCTL_SCSI_PASS_THROUGH. Работает с большинством USB-SATA мостов,
+    включая те, что не поддерживают IOCTL_ATA_PASS_THROUGH.
+    """
+    header_size = ctypes.sizeof(SCSI_PASS_THROUGH)
+    sense_size = 32
+    data_size = 512 if data_in else 0
+    # Буфер: header + sense + data (выровнено по 8 байт)
+    sense_offset = header_size
+    data_offset = sense_offset + sense_size
+    # Выравниваем data_offset по 8
+    data_offset = (data_offset + 7) & ~7
+    total_size = data_offset + data_size
+
+    buf = bytearray(total_size)
+
+    # SCSI_PASS_THROUGH header
+    struct.pack_into("<H", buf, 0, header_size)                  # Length
+    # ScsiStatus, PathId, TargetId, Lun = 0
+    buf[6] = 16                                                   # CdbLength
+    buf[7] = sense_size                                           # SenseInfoLength
+    buf[8] = SCSI_IOCTL_DATA_IN if data_in else 0                # DataIn
+
+    # DataTransferLength
+    dtl_offset = SCSI_PASS_THROUGH.DataTransferLength.offset
+    struct.pack_into("<I", buf, dtl_offset, data_size)
+
+    # TimeOutValue
+    tov_offset = SCSI_PASS_THROUGH.TimeOutValue.offset
+    struct.pack_into("<I", buf, tov_offset, 10)
+
+    # DataBufferOffset (ULONG_PTR)
+    dbo_offset = SCSI_PASS_THROUGH.DataBufferOffset.offset
+    ptr_size = ctypes.sizeof(ctypes.c_size_t)
+    if ptr_size == 8:
+        struct.pack_into("<Q", buf, dbo_offset, data_offset)
+    else:
+        struct.pack_into("<I", buf, dbo_offset, data_offset)
+
+    # SenseInfoOffset
+    sio_offset = SCSI_PASS_THROUGH.SenseInfoOffset.offset
+    struct.pack_into("<I", buf, sio_offset, sense_offset)
+
+    # CDB: ATA Pass-Through (16) — SAT command
+    cdb_offset = SCSI_PASS_THROUGH.Cdb.offset
+    buf[cdb_offset + 0] = 0x85          # ATA PASS-THROUGH (16) opcode
+    # Protocol: PIO Data-In (4) for reads, non-data (3) for commands
+    if data_in:
+        buf[cdb_offset + 1] = (4 << 1)  # protocol = PIO Data-In, extend = 0
+        buf[cdb_offset + 2] = 0x0E      # t_length=2(sector count), byt_blok=1, t_dir=1(from dev)
+    else:
+        buf[cdb_offset + 1] = (3 << 1)  # protocol = Non-data
+        buf[cdb_offset + 2] = 0x20      # ck_cond = 1
+    buf[cdb_offset + 4] = feature        # Features
+    buf[cdb_offset + 6] = 1              # Sector Count
+    buf[cdb_offset + 8] = 0              # LBA Low
+    buf[cdb_offset + 10] = SMART_CYL_LOW # LBA Mid = 0x4F
+    buf[cdb_offset + 12] = SMART_CYL_HI  # LBA High = 0xC2
+    buf[cdb_offset + 13] = 0xA0          # Device
+    buf[cdb_offset + 14] = ATA_SMART_CMD  # Command = 0xB0
+
+    result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+
+    if data_in and len(result) >= data_offset + 512:
+        return result[data_offset:data_offset + 512]
+    return b""
+
+
+def read_smart_via_sat(handle: DeviceHandle) -> list[SmartAttribute]:
+    """Прочитать SMART через ATA Pass-Through (для USB-дисков).
+
+    Пробует два метода:
+    1. IOCTL_ATA_PASS_THROUGH — простой, но не все USB-мосты поддерживают
+    2. IOCTL_SCSI_PASS_THROUGH + SAT CDB — более универсальный
+
+    Returns:
+        Список SmartAttribute или пустой список если оба метода не работают.
+    """
+    # Выбираем функцию отправки команд: сначала ATA PT, потом SCSI SAT
+    send_fn = None
+
+    for method_name, fn in [
+        ("ATA Pass-Through", _sat_smart_command),
+        ("SCSI SAT", _scsi_sat_smart_command),
+    ]:
+        try:
+            fn(handle, SMART_ENABLE_OPERATIONS, data_in=False)
+            logger.debug(f"{method_name}: SMART ENABLE sent")
+            send_fn = fn
+            break
+        except IoctlFailed:
+            try:
+                # Enable мог не пройти — пробуем сразу читать
+                test = fn(handle, SMART_READ_ATTRIBUTES)
+                if len(test) >= 362:  # минимум для хотя бы 1 атрибута
+                    send_fn = fn
+                    logger.info(f"{method_name}: works (enable skipped)")
+                    break
+            except IoctlFailed as e2:
+                logger.debug(f"{method_name}: not supported ({e2})")
+                continue
+
+    if send_fn is None:
+        logger.error("SAT: no supported pass-through method for this USB bridge")
+        return []
+
+    # 1. Read attributes
+    try:
+        attr_data = send_fn(handle, SMART_READ_ATTRIBUTES)
+    except IoctlFailed as e:
+        logger.error(f"SAT: SMART READ ATTRIBUTES failed: {e}")
+        return []
+
+    if len(attr_data) < 512:
+        logger.error(f"SAT: SMART data too short: {len(attr_data)} bytes")
+        return []
+
+    raw_attrs = _parse_raw_attributes(attr_data)
+
+    # 2. Read thresholds
+    thresholds = {}
+    try:
+        thresh_data = send_fn(handle, SMART_READ_THRESHOLDS)
+        if len(thresh_data) >= 512:
+            thresholds = _parse_thresholds(thresh_data)
+    except IoctlFailed as e:
+        logger.warning(f"SAT: SMART READ THRESHOLDS failed: {e}")
+
+    # 3. Assemble result (same logic as read_smart_attributes)
+    result = []
+    for attr in raw_attrs:
+        attr_id = attr["id"]
+        threshold = thresholds.get(attr_id, 0)
+        current = attr["current"]
+        is_critical = is_critical_attribute(attr_id)
+
+        if threshold > 0 and current <= threshold:
+            health = HealthLevel.CRITICAL
+        elif threshold > 0 and current <= threshold + 10:
+            health = HealthLevel.WARNING
+        elif is_critical and attr["raw_value"] > 0 and attr_id in (5, 196, 197, 198):
+            health = HealthLevel.WARNING
+        else:
+            health = HealthLevel.GOOD
+
+        result.append(SmartAttribute(
+            id=attr_id,
+            name=get_attribute_name(attr_id),
+            current=current,
+            worst=attr["worst"],
+            threshold=threshold,
+            raw_value=attr["raw_value"],
+            flags=attr["flags"],
+            health_level=health,
+        ))
+
+    result.sort(key=lambda a: a.id)
+    logger.info(f"SAT: read {len(result)} SMART attributes via ATA Pass-Through")
+    return result
 
 
 def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[SmartAttribute]:

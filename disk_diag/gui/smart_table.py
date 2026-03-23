@@ -8,6 +8,7 @@ from ..core.models import SmartAttribute, NvmeHealthInfo, HealthLevel, HealthSta
 from ..utils.formatting import format_capacity, format_hours, format_smart_raw
 from ..data.nvme_fields import NVME_HEALTH_FIELDS
 from ..data.smart_db import get_attribute_info
+from ..i18n import tr
 
 # Цвета строк по уровню здоровья
 _ROW_COLORS = {
@@ -57,8 +58,8 @@ class SmartTableWidget(QTableWidget):
         self.setSortingEnabled(False)
         self.clear()
 
-        columns = ["ID", "Attribute Name", "Current", "Worst", "Threshold",
-                    "Raw Value", "Status"]
+        columns = ["ID", tr("Attribute", "Атрибут"), tr("Current", "Текущ"), tr("Worst", "Худш"), tr("Threshold", "Порог"),
+                    tr("Raw Value", "Raw значение"), tr("Status", "Статус")]
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
         self.setRowCount(len(attributes))
@@ -75,14 +76,20 @@ class SmartTableWidget(QTableWidget):
                 desc = f"<b>{info.name}</b> (ID {attr.id})"
                 desc += f"<br>{info.description}"
                 if info.is_critical:
-                    desc += '<br><span style="color: #f9e2af;">⚠ Критический атрибут — влияет на надёжность диска</span>'
+                    crit_msg = tr("⚠ Critical attribute — affects drive reliability",
+                                  "⚠ Критический атрибут — влияет на надёжность диска")
+                    desc += f'<br><span style="color: #f9e2af;">{crit_msg}</span>'
             else:
-                desc = (f"<b>Unknown Attribute</b> (ID {attr.id})"
-                        f"<br>Атрибут не найден в базе SMART")
+                unk = tr("Unknown Attribute", "Неизвестный атрибут")
+                unk_desc = tr("Attribute not found in SMART database",
+                              "Атрибут не найден в базе SMART")
+                desc = f"<b>{unk}</b> (ID {attr.id})<br>{unk_desc}"
             id_item.setData(Qt.ItemDataRole.UserRole, desc)
 
-            # Name
+            # Name (+ синий цвет для критических)
             name_item = QTableWidgetItem(attr.name)
+            if info and info.is_critical:
+                name_item.setForeground(QColor(137, 180, 250))  # blue — критический атрибут
 
             # Current
             cur_item = QTableWidgetItem()
@@ -144,65 +151,100 @@ class SmartTableWidget(QTableWidget):
         self.setSortingEnabled(False)
         self.clear()
 
-        columns = ["Parameter", "Value", "Status"]
+        columns = [tr("Parameter", "Параметр"), tr("Value", "Значение"), tr("Status", "Статус")]
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
 
         # Формируем строки для NVMe: (name, value, health, description)
         _nf = NVME_HEALTH_FIELDS
-        rows_data = [
-            ("Critical Warning", f"0x{info.critical_warning:02X}",
-             HealthLevel.CRITICAL if info.critical_warning else HealthLevel.GOOD,
-             _nf["critical_warning"].description),
+        _wmi = info.wmi_fallback  # WMI fallback — показываем только доступные поля
+
+        rows_data = []
+
+        if not _wmi:
+            rows_data.append(
+                ("Critical Warning", f"0x{info.critical_warning:02X}",
+                 HealthLevel.CRITICAL if info.critical_warning else HealthLevel.GOOD,
+                 _nf["critical_warning"].description))
+
+        rows_data.append(
             ("Temperature", f"{info.temperature_celsius} °C",
              HealthLevel.CRITICAL if info.temperature_celsius > 70
              else HealthLevel.WARNING if info.temperature_celsius > 60
              else HealthLevel.GOOD,
-             _nf["temperature_celsius"].description),
-            ("Available Spare", f"{info.available_spare}%",
-             HealthLevel.CRITICAL if info.available_spare < info.available_spare_threshold
-             else HealthLevel.WARNING if info.available_spare < info.available_spare_threshold + 10
-             else HealthLevel.GOOD,
-             _nf["available_spare"].description),
-            ("Available Spare Threshold", f"{info.available_spare_threshold}%",
-             HealthLevel.UNKNOWN,
-             _nf["available_spare_threshold"].description),
+             _nf["temperature_celsius"].description))
+
+        if not _wmi:
+            rows_data.append(
+                ("Available Spare", f"{info.available_spare}%",
+                 HealthLevel.CRITICAL if info.available_spare < info.available_spare_threshold
+                 else HealthLevel.WARNING if info.available_spare < info.available_spare_threshold + 10
+                 else HealthLevel.GOOD,
+                 _nf["available_spare"].description))
+            rows_data.append(
+                ("Available Spare Threshold", f"{info.available_spare_threshold}%",
+                 HealthLevel.UNKNOWN,
+                 _nf["available_spare_threshold"].description))
+
+        rows_data.append(
             ("Percentage Used", f"{info.percentage_used}%",
              HealthLevel.CRITICAL if info.percentage_used > 100
              else HealthLevel.WARNING if info.percentage_used > 80
              else HealthLevel.GOOD,
-             _nf["percentage_used"].description),
-            ("Data Read", format_capacity(info.data_units_read * 512000),
-             HealthLevel.UNKNOWN,
-             _nf["data_units_read"].description),
-            ("Data Written", format_capacity(info.data_units_written * 512000),
-             HealthLevel.UNKNOWN,
-             _nf["data_units_written"].description),
-            ("Host Read Commands", f"{info.host_read_commands:,}",
-             HealthLevel.UNKNOWN,
-             _nf["host_read_commands"].description),
-            ("Host Write Commands", f"{info.host_write_commands:,}",
-             HealthLevel.UNKNOWN,
-             _nf["host_write_commands"].description),
-            ("Controller Busy Time", format_hours(info.controller_busy_time // 60) if info.controller_busy_time else "0",
-             HealthLevel.UNKNOWN,
-             _nf["controller_busy_time"].description),
-            ("Power Cycles", f"{info.power_cycles:,}",
-             HealthLevel.UNKNOWN,
-             _nf["power_cycles"].description),
-            ("Power-On Hours", format_hours(info.power_on_hours),
-             HealthLevel.UNKNOWN,
-             _nf["power_on_hours"].description),
-            ("Unsafe Shutdowns", f"{info.unsafe_shutdowns:,}",
-             HealthLevel.WARNING if info.unsafe_shutdowns > 100 else HealthLevel.GOOD,
-             _nf["unsafe_shutdowns"].description),
-            ("Media Errors", f"{info.media_errors:,}",
-             HealthLevel.CRITICAL if info.media_errors > 0 else HealthLevel.GOOD,
-             _nf["media_errors"].description),
-            ("Error Log Entries", f"{info.error_log_entries:,}",
-             HealthLevel.UNKNOWN,
-             _nf["error_log_entries"].description),
-        ]
+             _nf["percentage_used"].description))
+
+        if not _wmi:
+            rows_data.extend([
+                ("Data Read", format_capacity(info.data_units_read * 512000),
+                 HealthLevel.UNKNOWN,
+                 _nf["data_units_read"].description),
+                ("Data Written", format_capacity(info.data_units_written * 512000),
+                 HealthLevel.UNKNOWN,
+                 _nf["data_units_written"].description),
+                ("Host Read Commands", f"{info.host_read_commands:,}",
+                 HealthLevel.UNKNOWN,
+                 _nf["host_read_commands"].description),
+                ("Host Write Commands", f"{info.host_write_commands:,}",
+                 HealthLevel.UNKNOWN,
+                 _nf["host_write_commands"].description),
+                ("Controller Busy Time",
+                 format_hours(info.controller_busy_time // 60) if info.controller_busy_time else "0",
+                 HealthLevel.UNKNOWN,
+                 _nf["controller_busy_time"].description),
+            ])
+
+        if info.power_cycles:
+            rows_data.append(
+                ("Power Cycles", f"{info.power_cycles:,}",
+                 HealthLevel.UNKNOWN,
+                 _nf["power_cycles"].description))
+
+        if info.power_on_hours:
+            rows_data.append(
+                ("Power-On Hours", format_hours(info.power_on_hours),
+                 HealthLevel.UNKNOWN,
+                 _nf["power_on_hours"].description))
+
+        if not _wmi:
+            rows_data.extend([
+                ("Unsafe Shutdowns", f"{info.unsafe_shutdowns:,}",
+                 HealthLevel.WARNING if info.unsafe_shutdowns > 100 else HealthLevel.GOOD,
+                 _nf["unsafe_shutdowns"].description),
+                ("Media Errors", f"{info.media_errors:,}",
+                 HealthLevel.CRITICAL if info.media_errors > 0 else HealthLevel.GOOD,
+                 _nf["media_errors"].description),
+                ("Error Log Entries", f"{info.error_log_entries:,}",
+                 HealthLevel.UNKNOWN,
+                 _nf["error_log_entries"].description),
+            ])
+
+        if _wmi:
+            rows_data.append(
+                (tr("Data Source", "Источник данных"), tr("WMI (limited — NVMe IOCTL not supported by driver)", "WMI (ограниченные данные — NVMe IOCTL не поддерживается драйвером)"),
+                 HealthLevel.UNKNOWN,
+                 "NVMe protocol-specific IOCTL не поддерживается драйвером диска. "
+                 "Данные получены через Windows Management Instrumentation (ограниченный набор)."))
+
 
         # Добавляем датчики температуры если есть
         for i, temp in enumerate(info.temperature_sensors):
@@ -232,6 +274,10 @@ class SmartTableWidget(QTableWidget):
             status_color = _STATUS_TEXT_COLORS.get(health)
             if status_color and health != HealthLevel.UNKNOWN:
                 status_item.setForeground(QBrush(status_color))
+
+            # Русская подсказка при наведении
+            for it in (name_item, value_item, status_item):
+                it.setToolTip(desc_text)
 
             self.setItem(row, 0, name_item)
             self.setItem(row, 1, value_item)

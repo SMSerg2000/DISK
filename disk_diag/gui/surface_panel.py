@@ -10,12 +10,14 @@ import time
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QProgressBar, QLabel, QGroupBox, QSplitter, QComboBox,
+    QMessageBox, QCheckBox, QLineEdit, QTextEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen
 
 from ..core.surface_scan import SurfaceScanEngine, BLOCK_SIZES, DEFAULT_BLOCK_SIZE
-from ..core.models import BlockCategory, SurfaceScanResult
+from ..core.models import BlockCategory, ScanMode, SurfaceScanResult
+from ..i18n import tr
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ CATEGORY_LABELS = {
     BlockCategory.SLOW:       "< 150 ms",
     BlockCategory.VERY_SLOW:  "< 500 ms",
     BlockCategory.CRITICAL:   "\u2265 500 ms",
-    BlockCategory.ERROR:      "Errors",
+    BlockCategory.ERROR:      tr("Errors", "Ошибки"),
 }
 
 
@@ -53,11 +55,19 @@ class _SurfaceScanWorker(QObject):
     progress = Signal(float, str)             # 0..1, message
     finished = Signal(object)                 # SurfaceScanResult
     error = Signal(str)
+    bad_sector = Signal(int)                  # LBA битого сектора (реалтайм)
 
     def __init__(self, drive_number: int, capacity_bytes: int,
-                 block_size: int = DEFAULT_BLOCK_SIZE):
+                 block_size: int = DEFAULT_BLOCK_SIZE,
+                 mode: ScanMode = ScanMode.IGNORE,
+                 erase_slow: bool = False,
+                 start_offset: int = 0,
+                 end_offset: int = 0):
         super().__init__()
-        self._engine = SurfaceScanEngine(drive_number, capacity_bytes, block_size)
+        self._engine = SurfaceScanEngine(
+            drive_number, capacity_bytes, block_size, mode, erase_slow,
+            start_offset, end_offset,
+        )
 
     @property
     def total_blocks(self) -> int:
@@ -68,6 +78,7 @@ class _SurfaceScanWorker(QObject):
             result = self._engine.scan(
                 block_callback=lambda idx, cat, lat: self.block_scanned.emit(idx, cat.value, lat),
                 progress_callback=lambda pct, msg: self.progress.emit(pct, msg),
+                bad_sector_callback=lambda lba: self.bad_sector.emit(lba),
             )
             self.finished.emit(result)
         except Exception as e:
@@ -135,7 +146,7 @@ class BlockMapWidget(QWidget):
             font = QFont("Segoe UI", 11)
             painter.setFont(font)
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
-                             "Select a drive and start scan")
+                             tr("Select a drive and start scan", "Выберите диск и запустите сканирование"))
             painter.end()
             return
 
@@ -195,7 +206,7 @@ class _StatsPanel(QGroupBox):
     """Панель статистики: легенда + счётчики + скорость/время."""
 
     def __init__(self, parent=None):
-        super().__init__("Statistics", parent)
+        super().__init__(tr("Statistics", "Статистика"), parent)
         self.setMinimumWidth(180)
         self.setMaximumWidth(220)
 
@@ -239,51 +250,102 @@ class _StatsPanel(QGroupBox):
         # Скорость, время, ETA
         info_font = QFont("Segoe UI", 10)
 
-        self._speed_label = QLabel("Speed: —")
+        self._speed_label = QLabel(tr("Speed: —", "Скорость: —"))
         self._speed_label.setFont(info_font)
         self._speed_label.setStyleSheet("color: #a6adc8;")
 
-        self._time_label = QLabel("Time: —")
+        self._time_label = QLabel(tr("Time: —", "Время: —"))
         self._time_label.setFont(info_font)
         self._time_label.setStyleSheet("color: #a6adc8;")
 
-        self._eta_label = QLabel("ETA: —")
+        self._eta_label = QLabel(tr("ETA: —", "Осталось: —"))
         self._eta_label.setFont(info_font)
         self._eta_label.setStyleSheet("color: #a6adc8;")
 
-        self._scanned_label = QLabel("Scanned: —")
+        self._scanned_label = QLabel(tr("Scanned: —", "Просканировано: —"))
         self._scanned_label.setFont(info_font)
         self._scanned_label.setStyleSheet("color: #a6adc8;")
+
+        self._repaired_label = QLabel("")
+        self._repaired_label.setFont(info_font)
+        self._repaired_label.setStyleSheet("color: #a6e3a1;")
+        self._repaired_label.hide()
 
         layout.addWidget(self._speed_label)
         layout.addWidget(self._time_label)
         layout.addWidget(self._eta_label)
         layout.addWidget(self._scanned_label)
+        layout.addWidget(self._repaired_label)
 
-        layout.addStretch()
+        # Список битых секторов (LBA) — скроллируемый
+        self._bad_sectors_edit = QTextEdit()
+        self._bad_sectors_edit.setReadOnly(True)
+        self._bad_sectors_edit.setFont(QFont("Consolas", 9))
+        self._bad_sectors_edit.setStyleSheet(
+            "color: #f38ba8; background-color: #1e1e2e; border: none;"
+        )
+        self._bad_sectors_edit.hide()
+        layout.addWidget(self._bad_sectors_edit, stretch=1)
 
     def update_counts(self, counts: dict[int, int]):
         for cat_val, label in self._cat_labels.items():
             label.setText(f"{counts.get(cat_val, 0):,}")
 
     def update_info(self, speed_mbps: float, elapsed_sec: float, eta_sec: float,
-                    scanned: int, total: int):
-        self._speed_label.setText(f"Speed: {speed_mbps:.1f} MB/s")
-        self._time_label.setText(f"Time: {self._fmt_time(elapsed_sec)}")
+                    scanned: int, total: int, block_size: int = 0,
+                    start_lba: int = 0):
+        self._speed_label.setText(f"{tr("Speed", "Скорость")}: {speed_mbps:.1f} MB/s")
+        self._time_label.setText(f"{tr("Time", "Время")}: {self._fmt_time(elapsed_sec)}")
         if eta_sec > 0:
-            self._eta_label.setText(f"ETA: {self._fmt_time(eta_sec)}")
+            self._eta_label.setText(f"{tr("ETA", "Осталось")}: {self._fmt_time(eta_sec)}")
         else:
-            self._eta_label.setText("ETA: —")
+            self._eta_label.setText(tr("ETA: —", "Осталось: —"))
         pct = scanned / total * 100 if total > 0 else 0
-        self._scanned_label.setText(f"Scanned: {scanned:,} / {total:,} ({pct:.1f}%)")
+        if block_size > 0:
+            # Абсолютная позиция в LBA (512-byte sectors)
+            sectors_per_block = block_size // 512
+            current_lba = start_lba + scanned * sectors_per_block
+            end_lba = start_lba + total * sectors_per_block
+            self._scanned_label.setText(
+                f"Scanned: LBA {current_lba:,} / {end_lba:,} ({pct:.1f}%)"
+            )
+        else:
+            self._scanned_label.setText(f"Scanned: {scanned:,} / {total:,} ({pct:.1f}%)")
+
+    def update_repair_stats(self, repaired: int, write_errors: int):
+        if repaired > 0 or write_errors > 0:
+            parts = []
+            if repaired > 0:
+                parts.append(f"Исправлено: {repaired:,}")
+            if write_errors > 0:
+                parts.append(f"Ошибок записи: {write_errors:,}")
+            self._repaired_label.setText("  |  ".join(parts))
+            self._repaired_label.show()
+        else:
+            self._repaired_label.hide()
+
+    def update_bad_sectors(self, lbas: list[int]):
+        if not lbas:
+            self._bad_sectors_edit.hide()
+            return
+        header = f"Битые секторы ({len(lbas):,}):"
+        lines = [f"  LBA {lba:,}" for lba in lbas]
+        self._bad_sectors_edit.setText(header + "\n" + "\n".join(lines))
+        # Автоскролл вниз к последнему найденному
+        scrollbar = self._bad_sectors_edit.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        self._bad_sectors_edit.show()
 
     def clear(self):
         for label in self._cat_labels.values():
             label.setText("0")
-        self._speed_label.setText("Speed: —")
-        self._time_label.setText("Time: —")
-        self._eta_label.setText("ETA: —")
-        self._scanned_label.setText("Scanned: —")
+        self._speed_label.setText(tr("Speed: —", "Скорость: —"))
+        self._time_label.setText(tr("Time: —", "Время: —"))
+        self._eta_label.setText(tr("ETA: —", "Осталось: —"))
+        self._scanned_label.setText(tr("Scanned: —", "Просканировано: —"))
+        self._repaired_label.hide()
+        self._bad_sectors_edit.clear()
+        self._bad_sectors_edit.hide()
 
     @staticmethod
     def _fmt_time(seconds: float) -> str:
@@ -307,10 +369,12 @@ class SurfaceScanPanel(QWidget):
         self._capacity_bytes: int = 0
         self._worker: _SurfaceScanWorker | None = None
         self._thread: QThread | None = None
+        self._model: str = ""
 
         # Для расчёта скорости и ETA
         self._scan_start_time: float = 0.0
         self._current_block_size: int = DEFAULT_BLOCK_SIZE
+        self._start_lba: int = 0
         self._counts: dict[int, int] = {}
 
         self._setup_ui()
@@ -339,7 +403,7 @@ class SurfaceScanPanel(QWidget):
         self._btn_stop.clicked.connect(self._stop_scan)
 
         # Выбор размера блока
-        block_label = QLabel("Block:")
+        block_label = QLabel(tr("Block:", "Блок:"))
         block_label.setStyleSheet("color: #a6adc8;")
         self._block_combo = QComboBox()
         self._block_combo.setFixedHeight(36)
@@ -351,18 +415,76 @@ class SurfaceScanPanel(QWidget):
                 default_idx = i
         self._block_combo.setCurrentIndex(default_idx)
 
+        # Выбор режима сканирования
+        mode_label = QLabel(tr("Mode:", "Режим:"))
+        mode_label.setStyleSheet("color: #a6adc8;")
+        self._mode_combo = QComboBox()
+        self._mode_combo.setFixedHeight(36)
+        self._mode_combo.setMinimumWidth(100)
+        self._mode_combo.addItem("Ignore", ScanMode.IGNORE)
+        self._mode_combo.addItem("Erase", ScanMode.ERASE)
+        self._mode_combo.addItem("Refresh", ScanMode.REFRESH)
+        self._mode_combo.addItem("WRITE !!!", ScanMode.WRITE)
+        self._mode_combo.setToolTip(
+            "Ignore — только чтение\n"
+            "Erase — запись нулей в нечитаемые секторы (firmware HDD переназначит их)\n"
+            "Refresh — чтение → перезапись тех же данных (освежает секторы)\n"
+            "Write — ПОЛНОЕ СТИРАНИЕ: запись нулей на всю поверхность (все данные будут уничтожены!)"
+        )
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+
+        # Чекбокс "включая медленные" — виден только при Erase
+        self._slow_check = QCheckBox("+ Slow")
+        self._slow_check.setToolTip(
+            "Стирать также медленные секторы (VERY_SLOW ≥150ms, CRITICAL ≥500ms).\n"
+            "Данные в этих секторах будут уничтожены!"
+        )
+        self._slow_check.setStyleSheet("color: #f9e2af;")
+        self._slow_check.hide()
+
+        # Диапазон сканирования (LBA)
+        from_label = QLabel("LBA from:")
+        from_label.setStyleSheet("color: #a6adc8;")
+        self._from_edit = QLineEdit("0")
+        self._from_edit.setFixedHeight(36)
+        self._from_edit.setFixedWidth(120)
+        self._from_edit.setPlaceholderText("Start LBA")
+        self._from_edit.setToolTip("Начальный сектор (LBA)")
+
+        to_label = QLabel("to:")
+        to_label.setStyleSheet("color: #a6adc8;")
+        self._to_edit = QLineEdit("0")
+        self._to_edit.setFixedHeight(36)
+        self._to_edit.setFixedWidth(120)
+        self._to_edit.setPlaceholderText("End LBA")
+        self._to_edit.setToolTip("Конечный сектор (LBA)")
+
+        self._from_edit.textChanged.connect(lambda: self._update_range_hint())
+        self._to_edit.textChanged.connect(lambda: self._update_range_hint())
+
+        self._range_hint = QLabel("")
+        self._range_hint.setStyleSheet("color: #585b70; font-size: 10px;")
+
         self._progress = QProgressBar()
         self._progress.setRange(0, 1000)  # 0.1% точность
         self._progress.setValue(0)
         self._progress.setFixedHeight(24)
 
-        self._status = QLabel("Select a drive")
+        self._status = QLabel(tr("Select a drive", "Выберите диск"))
         self._status.setStyleSheet("color: #a6adc8;")
 
         controls.addWidget(self._btn_start)
         controls.addWidget(self._btn_stop)
         controls.addWidget(block_label)
         controls.addWidget(self._block_combo)
+        controls.addWidget(mode_label)
+        controls.addWidget(self._mode_combo)
+        controls.addWidget(self._slow_check)
+        controls.addWidget(from_label)
+        controls.addWidget(self._from_edit)
+        controls.addWidget(to_label)
+        controls.addWidget(self._to_edit)
+        controls.addWidget(self._range_hint)
         controls.addWidget(self._progress, stretch=1)
         controls.addWidget(self._status)
         layout.addLayout(controls)
@@ -382,15 +504,22 @@ class SurfaceScanPanel(QWidget):
 
     # --- Public API ---
 
-    def set_drive(self, drive_number: int, capacity_bytes: int):
+    def set_drive(self, drive_number: int, capacity_bytes: int, model: str = ""):
         """Установить диск для сканирования."""
         self.stop()
         self._drive_number = drive_number
         self._capacity_bytes = capacity_bytes
+        self._model = model
         self._btn_start.setEnabled(True)
-        self._status.setText("Ready")
+        self._status.setText(tr("Ready", "Готов"))
         self._status.setStyleSheet("color: #a6adc8;")
         self._clear_results()
+
+        # Обновляем диапазон (LBA)
+        max_lba = capacity_bytes // 512
+        self._from_edit.setText("0")
+        self._to_edit.setText(str(max_lba))
+        self._update_range_hint()
 
     def clear(self):
         """Полный сброс панели."""
@@ -398,7 +527,7 @@ class SurfaceScanPanel(QWidget):
         self._drive_number = None
         self._capacity_bytes = 0
         self._btn_start.setEnabled(False)
-        self._status.setText("Select a drive")
+        self._status.setText(tr("Select a drive", "Выберите диск"))
         self._status.setStyleSheet("color: #a6adc8;")
         self._clear_results()
 
@@ -415,6 +544,28 @@ class SurfaceScanPanel(QWidget):
         self._btn_start.setEnabled(self._drive_number is not None)
         self._btn_stop.setEnabled(False)
         self._block_combo.setEnabled(True)
+        self._mode_combo.setEnabled(True)
+        self._slow_check.setEnabled(True)
+        self._from_edit.setEnabled(True)
+        self._to_edit.setEnabled(True)
+
+    def _on_mode_changed(self, index: int):
+        """Показать/скрыть чекбокс + Slow при переключении режима."""
+        mode = self._mode_combo.currentData()
+        self._slow_check.setVisible(mode == ScanMode.ERASE)
+
+    def _update_range_hint(self):
+        """Обновить подсказку с размером диапазона в GB."""
+        try:
+            start_lba = int(self._from_edit.text().replace(",", "").strip() or "0")
+            end_lba = int(self._to_edit.text().replace(",", "").strip() or "0")
+            if end_lba > start_lba:
+                size_gb = (end_lba - start_lba) * 512 / (1024 ** 3)
+                self._range_hint.setText(f"({size_gb:.1f} GB)")
+            else:
+                self._range_hint.setText("")
+        except ValueError:
+            self._range_hint.setText("")
 
     # --- Private ---
 
@@ -423,22 +574,136 @@ class SurfaceScanPanel(QWidget):
         self._stats.clear()
         self._progress.setValue(0)
         self._counts = {}
+        self._bad_lbas: list[int] = []
 
     def _start_scan(self):
         if self._drive_number is None:
             return
 
+        mode = self._mode_combo.currentData()
+
+        erase_slow = self._slow_check.isChecked() and mode == ScanMode.ERASE
+
+        # Предупреждение для деструктивных режимов
+        if mode != ScanMode.IGNORE:
+            if mode == ScanMode.WRITE:
+                size_gb = self._capacity_bytes / (1024 ** 3)
+                warn_text = tr(
+                    f"⚠️ WRITE MODE — FULL SURFACE ERASE!\n\n"
+                    f"Disk: {self._model.strip()} ({size_gb:.1f} GB)\n\n"
+                    f"Writing zeros to EVERY sector.\n"
+                    f"ALL DATA WILL BE PERMANENTLY DESTROYED!\n"
+                    f"All bad sectors will be remapped by firmware.\n\n"
+                    f"ARE YOU SURE?",
+                    f"⚠️ РЕЖИМ WRITE — ПОЛНОЕ СТИРАНИЕ ПОВЕРХНОСТИ!\n\n"
+                    f"Диск: {self._model.strip()} ({size_gb:.1f} GB)\n\n"
+                    f"Запись нулей на КАЖДЫЙ сектор диска.\n"
+                    f"ВСЕ ДАННЫЕ БУДУТ БЕЗВОЗВРАТНО УНИЧТОЖЕНЫ!\n"
+                    f"Все бэд-секторы будут переназначены firmware.\n\n"
+                    f"ВЫ УВЕРЕНЫ?",
+                )
+            elif mode == ScanMode.REFRESH:
+                warn_text = tr(
+                    "REFRESH mode rewrites ALL sectors.\n"
+                    "Data is preserved (read → write same data),\n"
+                    "but power failure during write may cause data loss.\n\n"
+                    "Continue?",
+                    "Режим REFRESH перезаписывает ВСЕ секторы диска.\n"
+                    "Данные сохраняются (чтение → запись тех же данных),\n"
+                    "но при сбое питания во время записи данные могут быть потеряны.\n\n"
+                    "Продолжить?",
+                )
+            elif erase_slow:
+                warn_text = tr(
+                    "ERASE + Slow writes ZEROS to unreadable\n"
+                    "AND slow sectors (≥150ms).\n"
+                    "DATA IN THESE SECTORS WILL BE DESTROYED!\n\n"
+                    "Continue?",
+                    "Режим ERASE + Slow записывает НУЛИ в нечитаемые\n"
+                    "И медленные секторы (≥150ms).\n"
+                    "ДАННЫЕ В ЭТИХ СЕКТОРАХ БУДУТ УНИЧТОЖЕНЫ!\n\n"
+                    "Продолжить?",
+                )
+            else:
+                warn_text = tr(
+                    "ERASE mode writes zeros to unreadable sectors.\n"
+                    "HDD firmware will remap them from spare area.\n"
+                    "Data in these sectors is already lost (unreadable).\n\n"
+                    "Continue?",
+                    "Режим ERASE записывает нули в нечитаемые секторы.\n"
+                    "Firmware HDD переназначит их из резервной области.\n"
+                    "Данные в этих секторах уже потеряны (не читаются).\n\n"
+                    "Продолжить?",
+                )
+
+            reply = QMessageBox.warning(
+                self, f"Surface Scan — {mode.value.upper()}",
+                warn_text,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            # Двойная защита для системного диска
+            if mode == ScanMode.WRITE:
+                from ..core.winapi import is_system_drive
+                if is_system_drive(self._drive_number):
+                    reply2 = QMessageBox.critical(
+                        self, tr("⚠️ SYSTEM DISK!", "⚠️ СИСТЕМНЫЙ ДИСК!"),
+                        tr(
+                            f"THIS IS THE SYSTEM DISK (contains Windows)!\n"
+                            f"Disk: {self._model.strip()}\n\n"
+                            f"Erasing will make the computer unbootable!\n"
+                            f"You will lose ALL programs and data!\n\n"
+                            f"DO YOU REALLY WANT TO ERASE THE SYSTEM DISK?",
+                            f"ЭТО СИСТЕМНЫЙ ДИСК (содержит Windows)!\n"
+                            f"Диск: {self._model.strip()}\n\n"
+                            f"Стирание сделает компьютер незагружаемым!\n"
+                            f"Вы потеряете ВСЕ программы и данные!\n\n"
+                            f"ВЫ ДЕЙСТВИТЕЛЬНО ХОТИТЕ СТЕРЕТЬ СИСТЕМНЫЙ ДИСК?",
+                        ),
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    if reply2 != QMessageBox.StandardButton.Yes:
+                        return
+
         self._clear_results()
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._block_combo.setEnabled(False)
-        self._status.setText("Scanning...")
+        self._mode_combo.setEnabled(False)
+        self._slow_check.setEnabled(False)
+        self._from_edit.setEnabled(False)
+        self._to_edit.setEnabled(False)
+
+        mode_label = mode.value
+        if erase_slow:
+            mode_label += "+slow"
+        self._status.setText(f"Scanning ({mode_label})...")
         self._status.setStyleSheet("color: #cdd6f4;")
 
         block_size = self._block_combo.currentData()
         self._current_block_size = block_size
+
+        # Парсим LBA из текстовых полей
+        try:
+            start_lba = int(self._from_edit.text().replace(",", "").strip() or "0")
+        except ValueError:
+            start_lba = 0
+        try:
+            end_lba = int(self._to_edit.text().replace(",", "").strip() or "0")
+        except ValueError:
+            end_lba = 0
+
+        self._start_lba = start_lba
+        start_bytes = start_lba * 512
+        end_bytes = end_lba * 512 if end_lba > 0 else 0
+
         self._worker = _SurfaceScanWorker(
-            self._drive_number, self._capacity_bytes, block_size
+            self._drive_number, self._capacity_bytes, block_size, mode,
+            erase_slow, start_bytes, end_bytes,
         )
 
         # Инициализация карты
@@ -452,6 +717,7 @@ class SurfaceScanPanel(QWidget):
         self._thread.started.connect(self._worker.run)
         self._worker.block_scanned.connect(self._on_block_scanned)
         self._worker.progress.connect(self._on_progress)
+        self._worker.bad_sector.connect(self._on_bad_sector)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._thread.quit)
@@ -462,7 +728,7 @@ class SurfaceScanPanel(QWidget):
 
     def _stop_scan(self):
         self.stop()
-        self._status.setText("Cancelled")
+        self._status.setText(tr("Cancelled", "Отменено"))
         self._status.setStyleSheet("color: #f9e2af;")
 
     def _on_block_scanned(self, block_index: int, category_value: int, latency_ms: float):
@@ -470,10 +736,16 @@ class SurfaceScanPanel(QWidget):
         self._block_map.set_block(block_index, category_value)
         self._counts[category_value] = self._counts.get(category_value, 0) + 1
 
+    def _on_bad_sector(self, lba: int):
+        """Битый сектор найден — добавляем в список (реалтайм)."""
+        self._bad_lbas.append(lba)
+
     def _on_refresh_tick(self):
         """Обновление GUI по таймеру (~30 fps)."""
         self._block_map.flush()
         self._stats.update_counts(self._counts)
+        if self._bad_lbas:
+            self._stats.update_bad_sectors(self._bad_lbas)
 
         # Скорость и ETA
         if self._worker and self._scan_start_time > 0:
@@ -484,7 +756,8 @@ class SurfaceScanPanel(QWidget):
             remaining = total - scanned
             eta_sec = remaining * (elapsed / scanned) if scanned > 0 else 0
 
-            self._stats.update_info(speed_mbps, elapsed, eta_sec, scanned, total)
+            self._stats.update_info(speed_mbps, elapsed, eta_sec, scanned, total,
+                                    self._current_block_size, self._start_lba)
 
     def _on_progress(self, fraction: float, message: str):
         self._progress.setValue(int(fraction * 1000))
@@ -497,26 +770,49 @@ class SurfaceScanPanel(QWidget):
         self._progress.setValue(1000)
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
+        self._block_combo.setEnabled(True)
+        self._mode_combo.setEnabled(True)
+        self._slow_check.setEnabled(True)
+        self._from_edit.setEnabled(True)
+        self._to_edit.setEnabled(True)
 
         # Итоговая статистика
         self._stats.update_counts(result.counts)
         self._stats.update_info(
             result.avg_speed_mbps, result.elapsed_sec, 0,
             result.scanned_blocks, result.total_blocks,
+            self._current_block_size, self._start_lba,
         )
+        self._stats.update_repair_stats(result.repaired_blocks, result.write_errors)
+        self._stats.update_bad_sectors(result.bad_sector_lbas)
 
+        # Финальный статус
+        parts = []
         if result.error_count > 0:
-            self._status.setText(
-                f"Done — {result.error_count} error(s) found!"
-            )
+            parts.append(f"{result.error_count} ошибок")
+        if result.repaired_blocks > 0:
+            parts.append(f"{result.repaired_blocks} исправлено")
+        if result.write_errors > 0:
+            parts.append(f"{result.write_errors} ошибок записи")
+
+        if result.error_count > 0 or result.write_errors > 0:
+            self._status.setText(f"Done — {', '.join(parts)}")
             self._status.setStyleSheet("color: #f38ba8;")
+        elif result.repaired_blocks > 0:
+            self._status.setText(f"Готово — {result.repaired_blocks} блоков исправлено, без ошибок!")
+            self._status.setStyleSheet("color: #a6e3a1;")
         else:
-            self._status.setText("Done — no errors!")
+            self._status.setText(tr("Done — no errors!", "Готово — без ошибок!"))
             self._status.setStyleSheet("color: #a6e3a1;")
 
     def _on_error(self, error_msg: str):
         self._refresh_timer.stop()
         self._btn_start.setEnabled(self._drive_number is not None)
         self._btn_stop.setEnabled(False)
-        self._status.setText(f"Error: {error_msg}")
+        self._block_combo.setEnabled(True)
+        self._mode_combo.setEnabled(True)
+        self._slow_check.setEnabled(True)
+        self._from_edit.setEnabled(True)
+        self._to_edit.setEnabled(True)
+        self._status.setText(f"Ошибка: {error_msg}")
         self._status.setStyleSheet("color: #f38ba8;")
