@@ -470,78 +470,119 @@ def is_system_drive(drive_number: int) -> bool:
         _CloseHandle(h)
 
 
-def lock_and_dismount_volumes(drive_number: int) -> list:
-    """Заблокировать и размонтировать все тома на указанном физическом диске.
+def _try_lock_volume(vol_path: str, drive_number: int, label: str) -> int | None:
+    """Попробовать открыть, проверить диск, заблокировать и размонтировать том."""
+    import struct
+    try:
+        h = _CreateFileW(vol_path, GENERIC_READ | GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         None, OPEN_EXISTING, 0, None)
+        handle_val = h if isinstance(h, int) else ctypes.cast(h, ctypes.c_void_p).value
+        if handle_val is None or handle_val == _INVALID_HANDLE:
+            return None
+    except Exception:
+        return None
 
-    Без этого Windows не позволяет писать в области смонтированных разделов.
-    Возвращает список открытых handle'ов томов (закрыть после записи!).
+    # Проверяем, на каком физическом диске этот том
+    try:
+        out_buf = (ctypes.c_ubyte * 32)()
+        bytes_ret = wintypes.DWORD(0)
+        ok = _DeviceIoControl(h, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                              None, 0, ctypes.byref(out_buf), 32,
+                              ctypes.byref(bytes_ret), None)
+        if ok and bytes_ret.value >= 12:
+            disk_num = struct.unpack_from("<I", bytes(out_buf), 8)[0]
+            if disk_num != drive_number:
+                _CloseHandle(h)
+                return None
+        else:
+            _CloseHandle(h)
+            return None
+    except Exception:
+        _CloseHandle(h)
+        return None
+
+    # Блокируем и размонтируем
+    dummy = wintypes.DWORD(0)
+    ok = _DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0,
+                          ctypes.byref(dummy), None)
+    if ok:
+        logger.info(f"Locked volume {label}")
+    else:
+        logger.warning(f"Failed to lock volume {label}")
+
+    ok = _DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
+                          ctypes.byref(dummy), None)
+    if ok:
+        logger.info(f"Dismounted volume {label}")
+    else:
+        logger.warning(f"Failed to dismount volume {label}")
+
+    return h
+
+
+# FindFirstVolumeW / FindNextVolumeW
+_FindFirstVolumeW = kernel32.FindFirstVolumeW
+_FindFirstVolumeW.restype = wintypes.HANDLE
+_FindFirstVolumeW.argtypes = [wintypes.LPWSTR, wintypes.DWORD]
+
+_FindNextVolumeW = kernel32.FindNextVolumeW
+_FindNextVolumeW.restype = wintypes.BOOL
+_FindNextVolumeW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD]
+
+_FindVolumeClose = kernel32.FindVolumeClose
+_FindVolumeClose.restype = wintypes.BOOL
+_FindVolumeClose.argtypes = [wintypes.HANDLE]
+
+
+def lock_and_dismount_volumes(drive_number: int) -> list:
+    """Заблокировать и размонтировать ВСЕ тома на физическом диске.
+
+    Ищет тома двумя способами:
+    1. По буквам A-Z (обычные тома)
+    2. Через FindFirstVolumeW (скрытые тома: EFI, Recovery и т.д.)
+
+    Возвращает список открытых handle'ов (закрыть после записи!).
     """
     volume_handles = []
+    seen_paths = set()
 
+    # 1) Буквенные тома (A-Z)
     for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         vol_path = f"\\\\.\\{letter}:"
-        try:
-            h = _CreateFileW(
-                vol_path,
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None,
-                OPEN_EXISTING,
-                0,
-                None,
-            )
-            handle_val = h if isinstance(h, int) else ctypes.cast(h, ctypes.c_void_p).value
-            if handle_val is None or handle_val == _INVALID_HANDLE:
-                continue
-        except Exception:
-            continue
+        h = _try_lock_volume(vol_path, drive_number, f"{letter}:")
+        if h is not None:
+            volume_handles.append(h)
+            seen_paths.add(vol_path)
 
-        # Проверяем, на каком физическом диске этот том
-        try:
-            # VOLUME_DISK_EXTENTS: disk_number at offset 8
-            out_buf = (ctypes.c_ubyte * 32)()
-            bytes_ret = wintypes.DWORD(0)
-            ok = _DeviceIoControl(
-                h,
-                IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-                None, 0,
-                ctypes.byref(out_buf), 32,
-                ctypes.byref(bytes_ret),
-                None,
-            )
-            if ok and bytes_ret.value >= 12:
-                # NumberOfDiskExtents at offset 0 (DWORD)
-                # First extent: DiskNumber at offset 8 (DWORD)
-                import struct
-                disk_num = struct.unpack_from("<I", bytes(out_buf), 8)[0]
-                if disk_num != drive_number:
-                    _CloseHandle(h)
-                    continue
+    # 2) Все тома через FindFirstVolumeW (включая скрытые без букв)
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        find_h = _FindFirstVolumeW(buf, 260)
+        handle_val = find_h if isinstance(find_h, int) else ctypes.cast(find_h, ctypes.c_void_p).value
+        if handle_val is None or handle_val == _INVALID_HANDLE:
+            return volume_handles
+
+        while True:
+            vol_guid = buf.value  # \\?\Volume{GUID}\
+            # Преобразуем в формат для CreateFile: убираем trailing backslash
+            if vol_guid.endswith("\\"):
+                vol_path = vol_guid[:-1]
             else:
-                _CloseHandle(h)
-                continue
-        except Exception:
-            _CloseHandle(h)
-            continue
+                vol_path = vol_guid
 
-        # Том на нашем диске — блокируем и размонтируем
-        dummy = wintypes.DWORD(0)
+            if vol_path not in seen_paths:
+                h = _try_lock_volume(vol_path, drive_number, vol_guid[:40])
+                if h is not None:
+                    volume_handles.append(h)
+                    seen_paths.add(vol_path)
 
-        ok = _DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0,
-                              ctypes.byref(dummy), None)
-        if ok:
-            logger.info(f"Locked volume {letter}:")
-        else:
-            logger.warning(f"Failed to lock volume {letter}:")
+            if not _FindNextVolumeW(find_h, buf, 260):
+                break
 
-        ok = _DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
-                              ctypes.byref(dummy), None)
-        if ok:
-            logger.info(f"Dismounted volume {letter}:")
-        else:
-            logger.warning(f"Failed to dismount volume {letter}:")
-
-        volume_handles.append(h)
+        _FindVolumeClose(find_h)
+    except Exception as e:
+        logger.debug(f"FindFirstVolume enumeration failed: {e}")
 
     return volume_handles
 
