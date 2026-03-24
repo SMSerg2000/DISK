@@ -153,6 +153,9 @@ class BenchmarkResult:
     # Temperature log: (elapsed_sec, temp_celsius)
     temp_log: list[tuple[float, float]] = field(default_factory=list)
 
+    # I/O errors during benchmark (non-fatal)
+    io_errors: list[str] = field(default_factory=list)
+
 
 class ScanMode(Enum):
     """Режим сканирования поверхности (как в Victoria HDD)."""

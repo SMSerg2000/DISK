@@ -154,6 +154,14 @@ def assess_ata_health(attributes: list[SmartAttribute],
     warnings = []
     critical_issues = []
 
+    # Нет атрибутов — SMART не прочитался
+    if not attributes:
+        return HealthStatus(
+            level=HealthLevel.UNKNOWN,
+            summary=tr("SMART data not available", "Данные SMART недоступны"),
+            health_score=-1,
+        )
+
     # Health Score
     health_score = _ata_health_score(attributes)
 

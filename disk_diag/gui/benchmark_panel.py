@@ -671,8 +671,15 @@ class BenchmarkPanel(QWidget):
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
         self._write_check.setEnabled(True)
-        self._status.setText(tr("Done!", "Готово!"))
-        self._status.setStyleSheet("color: #a6e3a1;")
+
+        if result.io_errors:
+            err_count = len(result.io_errors)
+            self._status.setText(tr(f"Done with {err_count} I/O error(s)",
+                                    f"Готово, {err_count} ошибок I/O"))
+            self._status.setStyleSheet("color: #f38ba8;")
+        else:
+            self._status.setText(tr("Done!", "Готово!"))
+            self._status.setStyleSheet("color: #a6e3a1;")
 
         # Sequential Read
         if result.sequential_speed_mbps > 0:
@@ -738,10 +745,25 @@ class BenchmarkPanel(QWidget):
             )
         elif result.slc_speed_mbps > 0:
             self._slc_card.set_result(
-                f"Без падения",
-                f"Speed: {result.slc_speed_mbps:.0f} MB/s\n"
-                f"(SLC cache > {BenchmarkEngine.SLC_MAX_GB} GB or no cache)",
+                tr("No cliff", "Без падения"),
+                f"{tr('Speed', 'Скорость')}: {result.slc_speed_mbps:.0f} MB/s",
             )
+
+        # Показать I/O Error в карточках write-тестов, если они не заполнились
+        if result.io_errors:
+            err_label = tr("I/O Error", "Ошибка I/O")
+            phase_cards = {
+                "seq_write": (self._seq_write_card, result.seq_write_speed_mbps),
+                "rnd_write": (self._rnd_write_card, result.random_write_count),
+                "mixed": (self._mixed_card, result.mixed_count),
+                "verify": (self._verify_card, result.verify_blocks_tested),
+                "slc_cache": (self._slc_card, result.slc_speed_mbps),
+            }
+            for err in result.io_errors:
+                phase = err.split(":")[0]
+                card_info = phase_cards.get(phase)
+                if card_info and card_info[1] == 0:
+                    card_info[0].set_result(f"✗ {err_label}", err.split(": ", 1)[-1][:60])
 
         # Charts
         if result.latency_points:

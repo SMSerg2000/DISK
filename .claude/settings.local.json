@@ -33,7 +33,8 @@
       "Bash(100 лет\":*)",
       "Bash(python3 -c \":*)",
       "Bash(git reset:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(python3:*)"
     ]
   }
 }

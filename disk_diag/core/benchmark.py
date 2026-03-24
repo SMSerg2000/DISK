@@ -109,16 +109,23 @@ class BenchmarkEngine:
         if self.include_write and not self._cancelled:
             vol_handles = lock_and_dismount_volumes(self.drive_number)
             try:
-                if not self._cancelled:
-                    self._run_sequential_write(result, progress)
-                if not self._cancelled:
-                    self._run_random_4k_write(result, progress)
-                if not self._cancelled:
-                    self._run_mixed_io(result, progress)
-                if not self._cancelled:
-                    self._run_verify(result, progress)
-                if not self._cancelled:
-                    self._run_slc_cache(result, progress)
+                write_phases = [
+                    ("seq_write", self._run_sequential_write),
+                    ("rnd_write", self._run_random_4k_write),
+                    ("mixed", self._run_mixed_io),
+                    ("verify", self._run_verify),
+                    ("slc_cache", self._run_slc_cache),
+                ]
+                for phase_name, phase_fn in write_phases:
+                    if self._cancelled:
+                        break
+                    try:
+                        phase_fn(result, progress)
+                    except DiskAccessError as e:
+                        logger.error(f"Benchmark {phase_name} I/O error: {e}")
+                        result.io_errors.append(f"{phase_name}: {e}")
+                        if progress:
+                            progress(phase_name, 1.0, f"I/O Error: {e}")
             finally:
                 unlock_volumes(vol_handles)
 
