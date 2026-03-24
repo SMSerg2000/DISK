@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v1.1.0
+# DISK Diagnostic Tool v1.3.0
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -112,7 +112,9 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **1.1.0** | Hidden volume lock (EFI/Recovery) via FindFirstVolumeW, bilingual SMART export |
+| **1.3.0** | Graceful I/O error handling in benchmarks, dead disk detection (UNKNOWN instead of false GOOD) |
+| 1.2.0 | NVMe SMART bilingual, critical attributes blue highlight |
+| 1.1.0 | Hidden volume lock (EFI/Recovery) via FindFirstVolumeW, bilingual SMART export |
 | 1.0.0 | Bilingual UI (RU/EN), SMART attribute translation, icon, theme fixes, benchmark export localization |
 | 0.12.0 | Write-Read-Verify, Mixed I/O, latency histogram, line charts, app icon, benchmark export |
 | 0.11.0 | Drive Sweep, Random 4K Write, temperature monitoring |
