@@ -207,8 +207,8 @@ class _StatsPanel(QGroupBox):
 
     def __init__(self, parent=None):
         super().__init__(tr("Statistics", "Статистика"), parent)
-        self.setMinimumWidth(180)
-        self.setMaximumWidth(220)
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(320)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(4)

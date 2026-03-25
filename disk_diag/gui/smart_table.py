@@ -110,8 +110,13 @@ class SmartTableWidget(QTableWidget):
             raw_display = format_smart_raw(attr.id, attr.raw_value)
             raw_item = QTableWidgetItem(raw_display)
             raw_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            # Tooltip с полным сырым значением
-            raw_item.setToolTip(f"Raw: {attr.raw_value} (0x{attr.raw_value:012X})")
+            # Tooltip с полным сырым значением + разбивка для packed values
+            tip = f"Raw: {attr.raw_value} (0x{attr.raw_value:012X})"
+            if attr.raw_value > 0xFFFFFF:  # > 16M — вероятно packed (SandForce и др.)
+                low16 = attr.raw_value & 0xFFFF
+                low32 = attr.raw_value & 0xFFFFFFFF
+                tip += f"\nLow16: {low16:,}  |  Low32: {low32:,}"
+            raw_item.setToolTip(tip)
 
             # Status
             status_text = attr.health_level.value.upper()

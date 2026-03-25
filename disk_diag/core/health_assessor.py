@@ -15,6 +15,15 @@ def _get_attr_raw(attributes: list[SmartAttribute], attr_id: int) -> int:
     return -1
 
 
+def _get_attr_raw_low32(attributes: list[SmartAttribute], attr_id: int) -> int:
+    """Получить нижние 4 байта raw_value (SandForce и другие контроллеры
+    пакуют вспомогательные счётчики в верхние байты)."""
+    for a in attributes:
+        if a.id == attr_id:
+            return a.raw_value & 0xFFFFFFFF
+    return -1
+
+
 def _get_attr_current(attributes: list[SmartAttribute], attr_id: int) -> int:
     """Получить current value атрибута по ID, или -1 если не найден."""
     for a in attributes:
@@ -27,13 +36,13 @@ def _ata_health_score(attributes: list[SmartAttribute]) -> int:
     """Рассчитать Health Score (0-100) для ATA/SATA по формуле SSD_TESTING_SPEC."""
     score = 100
 
-    # Reallocated Sectors (ID 5) — до 40 баллов
-    realloc = _get_attr_raw(attributes, 5)
+    # Reallocated Sectors (ID 5) — до 40 баллов (low32: SandForce пакует данные)
+    realloc = _get_attr_raw_low32(attributes, 5)
     if realloc > 0:
         score -= min(40, realloc * 2)
 
-    # Uncorrectable Errors (ID 187, 198) — до 40 баллов
-    uncorr = max(_get_attr_raw(attributes, 187), _get_attr_raw(attributes, 198))
+    # Uncorrectable Errors (ID 187, 198) — до 40 баллов (low32!)
+    uncorr = max(_get_attr_raw_low32(attributes, 187), _get_attr_raw_low32(attributes, 198))
     if uncorr > 0:
         score -= min(40, uncorr * 5)
 
@@ -47,8 +56,8 @@ def _ata_health_score(attributes: list[SmartAttribute]) -> int:
     if erase_fail > 0:
         score -= min(30, erase_fail * 3)
 
-    # Pending Sectors (ID 197) — до 20 баллов
-    pending = _get_attr_raw(attributes, 197)
+    # Pending Sectors (ID 197) — до 20 баллов (low32!)
+    pending = _get_attr_raw_low32(attributes, 197)
     if pending > 0:
         score -= min(20, pending * 4)
 
@@ -188,15 +197,17 @@ def assess_ata_health(attributes: list[SmartAttribute],
                 f"приближается к threshold={attr.threshold}"
             )
 
-        # Переназначенные/нестабильные/неисправимые секторы — raw > 0
-        if attr.id in (5, 196, 197, 198) and attr.raw_value > 0:
-            if attr.raw_value > 100:
+        # Переназначенные/нестабильные/неисправимые секторы — low32 raw > 0
+        # (SandForce и др. контроллеры пакуют вспомогательные данные в верхние байты)
+        if attr.id in (5, 196, 197, 198):
+            raw_low = attr.raw_value & 0xFFFFFFFF
+            if raw_low > 100:
                 critical_issues.append(
-                    f"{attr.name} (ID {attr.id}): raw={attr.raw_value} — критическое количество!"
+                    f"{attr.name} (ID {attr.id}): raw={raw_low} — критическое количество!"
                 )
-            else:
+            elif raw_low > 0:
                 warnings.append(
-                    f"{attr.name} (ID {attr.id}): raw={attr.raw_value} — обнаружены проблемные секторы"
+                    f"{attr.name} (ID {attr.id}): raw={raw_low} — обнаружены проблемные секторы"
                 )
 
         # Температура > 55°C
@@ -215,16 +226,25 @@ def assess_ata_health(attributes: list[SmartAttribute],
         elif pct > 70:
             warnings.append(f"TBW: {pct:.0f}% ресурса записи израсходовано")
 
+    # Power-On Hours (ID 9) — SandForce пакует данные, берём low16 если raw > 1M
+    poh_raw = _get_attr_raw(attributes, 9)
+    poh = -1
+    if poh_raw > 0:
+        if poh_raw > 1_000_000:
+            poh = poh_raw & 0xFFFF  # SandForce: часы в нижних 2 байтах
+        else:
+            poh = poh_raw
+
     # Уровень по score + issues
     if critical_issues:
         level = HealthLevel.CRITICAL
-        summary = f"CRITICAL (Score: {health_score}/100) — {tr("serious problems found!", "серьёзные проблемы!")}"
+        summary = f"CRITICAL (Score: {health_score}/100) — {tr('serious problems found!', 'серьёзные проблемы!')}"
     elif warnings:
         level = HealthLevel.WARNING
-        summary = f"WARNING (Score: {health_score}/100) — {tr("issues found", "есть замечания")}"
+        summary = f"WARNING (Score: {health_score}/100) — {tr('issues found', 'есть замечания')}"
     else:
         level = HealthLevel.GOOD
-        summary = f"GOOD (Score: {health_score}/100) — {tr("no problems found", "проблем не обнаружено")}"
+        summary = f"GOOD (Score: {health_score}/100) — {tr('no problems found', 'проблем не обнаружено')}"
 
     return HealthStatus(
         level=level,
@@ -236,6 +256,7 @@ def assess_ata_health(attributes: list[SmartAttribute],
         tbw_rated_tb=rated_tb,
         tbw_remaining_days=remaining_days,
         daily_write_tb=daily_write_tb,
+        power_on_hours=poh,
     )
 
 
@@ -444,4 +465,5 @@ def assess_nvme_health(info: NvmeHealthInfo, capacity_bytes: int = 0) -> HealthS
         tbw_remaining_days=remaining_days,
         daily_write_tb=daily_write_tb,
         waf=waf,
+        power_on_hours=info.power_on_hours if info.power_on_hours > 0 else -1,
     )

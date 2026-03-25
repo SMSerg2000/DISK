@@ -41,8 +41,8 @@ class HealthIndicator(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(120)
-        self.setMaximumHeight(160)
+        self.setMinimumHeight(140)
+        self.setMaximumHeight(220)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -74,6 +74,19 @@ class HealthIndicator(QFrame):
         extra_lines = []
         if status.health_score >= 0:
             extra_lines.append(f"Health Score: {status.health_score}/100")
+        if status.power_on_hours > 0:
+            h = status.power_on_hours
+            years = h // (365 * 24)
+            months = (h % (365 * 24)) // (30 * 24)
+            days = (h % (30 * 24)) // 24
+            parts = []
+            if years > 0:
+                parts.append(f"{years} {tr('y', 'г')}")
+            if months > 0:
+                parts.append(f"{months} {tr('mo', 'мес')}")
+            if days > 0 or not parts:
+                parts.append(f"{days} {tr('d', 'дн')}")
+            extra_lines.append(f"{tr('Uptime', 'Наработка')}: {' '.join(parts)} ({h:,} {tr('hrs', 'ч')})")
         # TBW и прогноз — только если диск не при смерти (score >= 30)
         if status.health_score >= 30:
             if status.tbw_consumed_tb > 0 and status.tbw_rated_tb > 0:

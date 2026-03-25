@@ -71,6 +71,10 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
                "Number of full power on/off cycles",
                "Количество полных циклов включения/выключения", False),
 
+    13:  _a(13,  "Soft Read Error Rate",          "Ошибки мягкого чтения",
+               "Soft read error rate (SandForce controllers)",
+               "Частота мягких ошибок чтения (контроллеры SandForce)", False),
+
     # === Kingston SSD ===
     100: _a(100, "Erase/Program Cycles",          "Циклы стирания/записи",
                "Total erase/program cycles (Kingston)",
@@ -206,7 +210,14 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
                "ECC correction cancellation count (SM SSD)",
                "Количество отменённых операций ECC-коррекции (SM SSD)", False),
 
+    204: _a(204, "Soft ECC Correction",           "Программная коррекция ECC",
+               "Soft ECC correction count (SandForce)",
+               "Количество программных коррекций ECC (SandForce)", False),
+
     # === Samsung SSD-специфичные ===
+    230: _a(230, "Drive Life Protection Status", "Статус защиты ресурса",
+               "Drive life protection status / head amplitude",
+               "Статус защиты ресурса диска / амплитуда головок", False),
     220: _a(220, "Disk Shift",                    "Смещение диска",
                "Disk shift relative to spindle",
                "Смещение диска относительно шпинделя", False),

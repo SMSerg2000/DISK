@@ -97,6 +97,7 @@ class HealthStatus:
     tbw_remaining_days: int = -1    # прогноз, -1 = не известно
     daily_write_tb: float = -1      # среднесуточная запись
     waf: float = -1                 # Write Amplification Factor, -1 = нет данных
+    power_on_hours: int = -1        # наработка в часах, -1 = не известно
 
 
 @dataclass
