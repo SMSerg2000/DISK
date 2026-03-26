@@ -341,9 +341,9 @@ def read_smart_via_sat(handle: DeviceHandle) -> list[SmartAttribute]:
 
         if threshold > 0 and current <= threshold:
             health = HealthLevel.CRITICAL
-        elif threshold > 0 and current <= threshold + 10:
+        elif threshold > 0 and current < 100 and current <= threshold + 10:
             health = HealthLevel.WARNING
-        elif is_critical and attr["raw_value"] > 0 and attr_id in (5, 196, 197, 198):
+        elif is_critical and (attr["raw_value"] & 0xFFFFFFFF) > 0 and attr_id in (5, 196, 197, 198):
             health = HealthLevel.WARNING
         else:
             health = HealthLevel.GOOD
@@ -421,10 +421,9 @@ def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[S
         # Определяем уровень здоровья
         if threshold > 0 and current <= threshold:
             health = HealthLevel.CRITICAL
-        elif threshold > 0 and current <= threshold + 10:
+        elif threshold > 0 and current < 100 and current <= threshold + 10:
             health = HealthLevel.WARNING
-        elif is_critical and attr["raw_value"] > 0 and attr_id in (5, 196, 197, 198):
-            # Для критических атрибутов — raw > 0 уже повод для warning
+        elif is_critical and (attr["raw_value"] & 0xFFFFFFFF) > 0 and attr_id in (5, 196, 197, 198):
             health = HealthLevel.WARNING
         else:
             health = HealthLevel.GOOD

@@ -141,8 +141,9 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0):
         capacity_tb = capacity_bytes / (1024 ** 4)
         rated_tb = capacity_tb * 600
 
-    # Прогноз жизни
-    power_on_hours = _get_attr_raw(attributes, 9)
+    # Прогноз жизни (SandForce: 20-битная маска для POH)
+    poh_raw = _get_attr_raw(attributes, 9)
+    power_on_hours = poh_raw & 0xFFFFF if poh_raw > 1_000_000 else poh_raw
     if consumed_tb > 0 and power_on_hours is not None and power_on_hours > 24:
         power_on_days = power_on_hours / 24.0
         daily_write_tb = consumed_tb / power_on_days
@@ -190,7 +191,9 @@ def assess_ata_health(attributes: list[SmartAttribute],
                 warnings.append(msg)
 
         # Проверка: критический атрибут current близко к threshold
+        # Но НЕ предупреждать если current >= 100 (максимальное/нормальное значение)
         elif (attr.threshold > 0 and is_critical
+              and attr.current < 100
               and attr.current <= attr.threshold + 10):
             warnings.append(
                 f"{attr.name} (ID {attr.id}): current={attr.current} "
@@ -226,12 +229,14 @@ def assess_ata_health(attributes: list[SmartAttribute],
         elif pct > 70:
             warnings.append(f"TBW: {pct:.0f}% ресурса записи израсходовано")
 
-    # Power-On Hours (ID 9) — SandForce пакует данные, берём low16 если raw > 1M
+    # Power-On Hours (ID 9)
+    # SandForce SF-2281: часы в нижних 20 битах (raw & 0xFFFFF)
+    # Нормальные контроллеры: raw = реальные часы
     poh_raw = _get_attr_raw(attributes, 9)
     poh = -1
     if poh_raw > 0:
         if poh_raw > 1_000_000:
-            poh = poh_raw & 0xFFFF  # SandForce: часы в нижних 2 байтах
+            poh = poh_raw & 0xFFFFF  # SandForce: 20-битная маска
         else:
             poh = poh_raw
 

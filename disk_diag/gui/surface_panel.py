@@ -314,12 +314,12 @@ class _StatsPanel(QGroupBox):
 
     def update_repair_stats(self, repaired: int, write_errors: int):
         if repaired > 0 or write_errors > 0:
-            parts = []
+            lines = []
             if repaired > 0:
-                parts.append(f"Исправлено: {repaired:,}")
+                lines.append(f"{tr('Repaired', 'Исправлено')}: {repaired:,}")
             if write_errors > 0:
-                parts.append(f"Ошибок записи: {write_errors:,}")
-            self._repaired_label.setText("  |  ".join(parts))
+                lines.append(f"{tr('Write err', 'Ошибок записи')}: {write_errors:,}")
+            self._repaired_label.setText("\n".join(lines))
             self._repaired_label.show()
         else:
             self._repaired_label.hide()
