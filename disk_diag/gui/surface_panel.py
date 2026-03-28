@@ -312,11 +312,15 @@ class _StatsPanel(QGroupBox):
         else:
             self._scanned_label.setText(f"Scanned: {scanned:,} / {total:,} ({pct:.1f}%)")
 
-    def update_repair_stats(self, repaired: int, write_errors: int):
+    def update_repair_stats(self, repaired: int, write_errors: int,
+                            is_refresh: bool = False):
         if repaired > 0 or write_errors > 0:
             lines = []
             if repaired > 0:
-                lines.append(f"{tr('Repaired', 'Исправлено')}: {repaired:,}")
+                if is_refresh:
+                    lines.append(f"{tr('Refreshed', 'Обновлено')}: {repaired:,}")
+                else:
+                    lines.append(f"{tr('Repaired', 'Исправлено')}: {repaired:,}")
             if write_errors > 0:
                 lines.append(f"{tr('Write err', 'Ошибок записи')}: {write_errors:,}")
             self._repaired_label.setText("\n".join(lines))
@@ -783,23 +787,26 @@ class SurfaceScanPanel(QWidget):
             result.scanned_blocks, result.total_blocks,
             self._current_block_size, self._start_lba,
         )
-        self._stats.update_repair_stats(result.repaired_blocks, result.write_errors)
+        is_refresh = self._mode_combo.currentData() == ScanMode.REFRESH
+        self._stats.update_repair_stats(result.repaired_blocks, result.write_errors,
+                                        is_refresh)
         self._stats.update_bad_sectors(result.bad_sector_lbas)
 
         # Финальный статус
+        repair_word = tr("refreshed", "обновлено") if is_refresh else tr("repaired", "исправлено")
         parts = []
         if result.error_count > 0:
-            parts.append(f"{result.error_count} ошибок")
+            parts.append(f"{result.error_count} {tr('errors', 'ошибок')}")
         if result.repaired_blocks > 0:
-            parts.append(f"{result.repaired_blocks} исправлено")
+            parts.append(f"{result.repaired_blocks} {repair_word}")
         if result.write_errors > 0:
-            parts.append(f"{result.write_errors} ошибок записи")
+            parts.append(f"{result.write_errors} {tr('write errors', 'ошибок записи')}")
 
         if result.error_count > 0 or result.write_errors > 0:
-            self._status.setText(f"Done — {', '.join(parts)}")
+            self._status.setText(f"{tr('Done', 'Готово')} — {', '.join(parts)}")
             self._status.setStyleSheet("color: #f38ba8;")
         elif result.repaired_blocks > 0:
-            self._status.setText(f"Готово — {result.repaired_blocks} блоков исправлено, без ошибок!")
+            self._status.setText(f"{tr('Done', 'Готово')} — {result.repaired_blocks} {repair_word}, {tr('no errors', 'без ошибок')}!")
             self._status.setStyleSheet("color: #a6e3a1;")
         else:
             self._status.setText(tr("Done — no errors!", "Готово — без ошибок!"))
