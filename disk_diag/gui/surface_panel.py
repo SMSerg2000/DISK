@@ -796,11 +796,11 @@ class SurfaceScanPanel(QWidget):
         repair_word = tr("refreshed", "обновлено") if is_refresh else tr("repaired", "исправлено")
         parts = []
         if result.error_count > 0:
-            parts.append(f"{result.error_count} {tr('errors', 'ошибок')}")
+            parts.append(f"{tr('err', 'ош')}: {result.error_count:,}")
         if result.repaired_blocks > 0:
-            parts.append(f"{result.repaired_blocks} {repair_word}")
+            parts.append(f"{repair_word}: {result.repaired_blocks:,}")
         if result.write_errors > 0:
-            parts.append(f"{result.write_errors} {tr('write errors', 'ошибок записи')}")
+            parts.append(f"{tr('W.err', 'ош.зап')}: {result.write_errors:,}")
 
         if result.error_count > 0 or result.write_errors > 0:
             self._status.setText(f"{tr('Done', 'Готово')} — {', '.join(parts)}")

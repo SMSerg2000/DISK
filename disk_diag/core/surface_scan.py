@@ -109,9 +109,10 @@ class SurfaceScanEngine:
         if progress_callback:
             progress_callback(0.0, "Starting surface scan...")
 
-        # WRITE: блокируем и размонтируем тома, чтобы Windows разрешила запись
+        # Блокируем и размонтируем тома для ВСЕХ режимов записи
+        # (без этого Windows блокирует запись в области смонтированных разделов)
         volume_handles = []
-        if self.mode == ScanMode.WRITE:
+        if writing:
             if progress_callback:
                 progress_callback(0.0, "Locking volumes...")
             volume_handles = lock_and_dismount_volumes(self.drive_number)
