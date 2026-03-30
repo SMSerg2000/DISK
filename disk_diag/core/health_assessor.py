@@ -152,7 +152,21 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0):
             remaining_tb = max(0, rated_tb - consumed_tb)
             remaining_days = int(remaining_tb / daily_write_tb)
 
-    return consumed_tb, rated_tb, remaining_days, daily_write_tb
+    # WAF = NAND Writes / Host Writes
+    waf = -1.0
+    if consumed_tb > 0:
+        # ID 249: NAND Writes в GiB
+        nand_gib = _get_attr_raw(attributes, 249)
+        if nand_gib > 0:
+            nand_tb = nand_gib / 1024
+            waf = round(nand_tb / consumed_tb, 2)
+        else:
+            # ID 243: Total NAND Writes (vendor-specific units)
+            nand_243 = _get_attr_raw(attributes, 243)
+            if nand_243 > 0 and host_writes_lba > 0:
+                waf = round(nand_243 / host_writes_lba, 2)
+
+    return consumed_tb, rated_tb, remaining_days, daily_write_tb, waf
 
 
 def assess_ata_health(attributes: list[SmartAttribute],
@@ -177,7 +191,7 @@ def assess_ata_health(attributes: list[SmartAttribute],
     health_score, score_penalties = _ata_health_score(attributes)
 
     # TBW (для SSD)
-    consumed_tb, rated_tb, remaining_days, daily_write_tb = \
+    consumed_tb, rated_tb, remaining_days, daily_write_tb, waf = \
         _ata_tbw(attributes, capacity_bytes)
 
     for attr in attributes:
@@ -262,6 +276,7 @@ def assess_ata_health(attributes: list[SmartAttribute],
         tbw_rated_tb=rated_tb,
         tbw_remaining_days=remaining_days,
         daily_write_tb=daily_write_tb,
+        waf=waf,
         power_on_hours=poh,
         penalties=score_penalties,
     )

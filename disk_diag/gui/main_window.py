@@ -13,6 +13,7 @@ from PySide6.QtGui import QKeySequence
 from datetime import datetime
 
 from .. import __version__, __app_name__
+from ..core.history import save_test
 from ..core.models import DriveInfo, DriveType, InterfaceType, HealthLevel, NvmeHealthInfo
 from ..data.nvme_fields import NVME_HEALTH_FIELDS
 from ..core.drive_enumerator import enumerate_drives
@@ -327,6 +328,22 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(
                 f"NVMe Health loaded{wmi_note} — {status.summary}", 5000
             )
+
+        # Сохранить в историю
+        if self._smart_status and self._smart_status.health_score >= 0:
+            drive = self._drive_selector.get_selected_drive()
+            if drive:
+                s = self._smart_status
+                save_test(
+                    serial=drive.serial_number or "",
+                    model=drive.model.strip(),
+                    version=__version__,
+                    health_score=s.health_score,
+                    tbw_consumed_tb=s.tbw_consumed_tb,
+                    power_on_hours=s.power_on_hours,
+                    waf=s.waf,
+                    penalties=[(r, p) for r, p in s.penalties],
+                )
 
         elif data_type == "none":
             self._smart_data_type = "none"
