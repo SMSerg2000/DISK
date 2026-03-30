@@ -238,6 +238,8 @@ class BenchmarkEngine:
             n = len(sorted_lat)
             result.random_p95_latency_us = sorted_lat[int(n * 0.95)]
             result.random_p99_latency_us = sorted_lat[min(int(n * 0.99), n - 1)]
+            result.random_p999_latency_us = sorted_lat[min(int(n * 0.999), n - 1)]
+            result.random_p9999_latency_us = sorted_lat[min(int(n * 0.9999), n - 1)]
 
         logger.info(
             f"Random 4K: {result.random_iops:,.0f} IOPS, "

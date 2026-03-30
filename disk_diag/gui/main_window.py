@@ -125,6 +125,10 @@ class MainWindow(QMainWindow):
             tr("Export Benchmark...", "Экспорт бенчмарка..."),
             self._export_benchmark, QKeySequence("Ctrl+B"),
         )
+        file_menu.addAction(
+            tr("Export JSON...", "Экспорт JSON..."),
+            self._export_json, QKeySequence("Ctrl+J"),
+        )
         file_menu.addSeparator()
         file_menu.addAction(tr("Exit", "Выход"), self.close, "Alt+F4")
 
@@ -401,7 +405,7 @@ class MainWindow(QMainWindow):
         if r.random_reads_count > 0:
             lines.append(f"{tr('Random 4K Read', '4K чтение'):<25} {r.random_iops:>12,.0f} IOPS"
                          f"  Avg:{r.random_avg_latency_us:.0f} P95:{r.random_p95_latency_us:.0f} "
-                         f"P99:{r.random_p99_latency_us:.0f} μs")
+                         f"P99:{r.random_p99_latency_us:.0f} P99.9:{r.random_p999_latency_us:.0f} μs")
         if r.random_write_count > 0:
             lines.append(f"{tr('Random 4K Write', '4K запись'):<25} {r.random_write_iops:>12,.0f} IOPS"
                          f"  Avg:{r.random_write_avg_latency_us:.0f} μs")
@@ -434,6 +438,126 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(f"{tr('Benchmark exported:', 'Бенчмарк экспортирован:')} {path}", 5000)
         except OSError as e:
             QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось записать файл:\n{e}")
+
+    def _export_json(self):
+        """Экспорт полной сессии в JSON."""
+        import json
+        import dataclasses
+
+        drive = self._drive_selector.get_selected_drive()
+        if not drive:
+            return
+
+        safe_model = drive.model.replace(" ", "_").replace("/", "-")
+        default_name = f"DISK_{safe_model}_{datetime.now():%Y%m%d_%H%M%S}.json"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, tr("Export JSON", "Экспорт JSON"), default_name,
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+
+        data = {
+            "tool_version": __version__,
+            "timestamp": datetime.now().isoformat(),
+            "device": {
+                "model": drive.model.strip(),
+                "serial": drive.serial_number,
+                "firmware": drive.firmware_revision,
+                "capacity_bytes": drive.capacity_bytes,
+                "capacity_gb": round(drive.capacity_bytes / (1024**3), 1),
+                "interface": drive.interface_type.value,
+                "type": drive.drive_type.value,
+            },
+        }
+
+        # SMART
+        if self._smart_status:
+            s = self._smart_status
+            data["health"] = {
+                "score": s.health_score,
+                "level": s.level.value,
+                "summary": s.summary,
+                "penalties": [{"reason": r, "points": p} for r, p in s.penalties],
+                "warnings": s.warnings,
+                "critical_issues": s.critical_issues,
+                "tbw_consumed_tb": s.tbw_consumed_tb,
+                "tbw_rated_tb": s.tbw_rated_tb,
+                "tbw_remaining_days": s.tbw_remaining_days,
+                "daily_write_tb": s.daily_write_tb,
+                "power_on_hours": s.power_on_hours,
+                "waf": s.waf,
+            }
+
+        if self._smart_data_type == "ata" and self._smart_ata_attrs:
+            data["smart_ata"] = [
+                {
+                    "id": a.id, "name": a.name,
+                    "current": a.current, "worst": a.worst,
+                    "threshold": a.threshold, "raw_value": a.raw_value,
+                    "health": a.health_level.value,
+                }
+                for a in self._smart_ata_attrs
+            ]
+        elif self._smart_data_type == "nvme" and self._smart_nvme_health:
+            h = self._smart_nvme_health
+            data["smart_nvme"] = {
+                "critical_warning": h.critical_warning,
+                "temperature_celsius": h.temperature_celsius,
+                "available_spare": h.available_spare,
+                "available_spare_threshold": h.available_spare_threshold,
+                "percentage_used": h.percentage_used,
+                "data_units_read": h.data_units_read,
+                "data_units_written": h.data_units_written,
+                "host_read_commands": h.host_read_commands,
+                "host_write_commands": h.host_write_commands,
+                "controller_busy_time": h.controller_busy_time,
+                "power_cycles": h.power_cycles,
+                "power_on_hours": h.power_on_hours,
+                "unsafe_shutdowns": h.unsafe_shutdowns,
+                "media_errors": h.media_errors,
+                "error_log_entries": h.error_log_entries,
+                "warning_temp_time": h.warning_temp_time,
+                "critical_temp_time": h.critical_temp_time,
+                "wmi_fallback": h.wmi_fallback,
+            }
+
+        # Benchmark
+        result = self._benchmark_panel._last_result
+        if result:
+            data["benchmark"] = {
+                "sequential_read_mbps": result.sequential_speed_mbps,
+                "sequential_write_mbps": result.seq_write_speed_mbps,
+                "random_4k_read_iops": result.random_iops,
+                "random_4k_read_avg_us": result.random_avg_latency_us,
+                "random_4k_read_p95_us": result.random_p95_latency_us,
+                "random_4k_read_p99_us": result.random_p99_latency_us,
+                "random_4k_read_p999_us": result.random_p999_latency_us,
+                "random_4k_read_p9999_us": result.random_p9999_latency_us,
+                "random_4k_write_iops": result.random_write_iops,
+                "mixed_io_total_iops": result.mixed_total_iops,
+                "mixed_io_read_iops": result.mixed_read_iops,
+                "mixed_io_write_iops": result.mixed_write_iops,
+                "verify_blocks_tested": result.verify_blocks_tested,
+                "verify_blocks_failed": result.verify_blocks_failed,
+                "slc_cache_size_gb": result.slc_cache_size_gb,
+                "slc_speed_mbps": result.slc_speed_mbps,
+                "slc_post_cache_speed_mbps": result.slc_post_cache_speed_mbps,
+                "sweep_points": result.sweep_points,
+                "slc_points": result.slc_points,
+                "temp_log": result.temp_log,
+                "io_errors": result.io_errors,
+            }
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            self._statusbar.showMessage(
+                f"{tr('JSON exported:', 'JSON экспортирован:')} {path}", 5000)
+        except OSError as e:
+            QMessageBox.critical(self, tr("Export Error", "Ошибка экспорта"),
+                                 f"{tr('Cannot write file:', 'Не удалось записать файл:')}\n{e}")
 
     def _export_smart(self):
         """Экспорт SMART данных в текстовый файл."""
@@ -471,6 +595,9 @@ class MainWindow(QMainWindow):
             lines.append(f"\n{tr('Health', 'Здоровье')}:     {level} — {s.summary}")
             if s.health_score >= 0:
                 lines.append(f"Score:      {s.health_score}/100")
+            if s.penalties:
+                for reason, pts in s.penalties:
+                    lines.append(f"  -{pts}: {reason}")
             if s.tbw_consumed_tb > 0:
                 lines.append(f"TBW {tr('used', 'использовано')}:   {s.tbw_consumed_tb:.1f} TB")
             if s.tbw_rated_tb > 0:

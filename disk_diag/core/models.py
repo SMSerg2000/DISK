@@ -98,6 +98,7 @@ class HealthStatus:
     daily_write_tb: float = -1      # среднесуточная запись
     waf: float = -1                 # Write Amplification Factor, -1 = нет данных
     power_on_hours: int = -1        # наработка в часах, -1 = не известно
+    penalties: list[tuple[str, int]] = field(default_factory=list)  # [(reason, points), ...]
 
 
 @dataclass
@@ -120,6 +121,8 @@ class BenchmarkResult:
     random_max_latency_us: float = 0.0
     random_p95_latency_us: float = 0.0
     random_p99_latency_us: float = 0.0
+    random_p999_latency_us: float = 0.0
+    random_p9999_latency_us: float = 0.0
     random_reads_count: int = 0
 
     # Random 4K write

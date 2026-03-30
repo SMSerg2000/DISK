@@ -74,6 +74,9 @@ class HealthIndicator(QFrame):
         extra_lines = []
         if status.health_score >= 0:
             extra_lines.append(f"Health Score: {status.health_score}/100")
+        if status.penalties:
+            for reason, pts in status.penalties:
+                extra_lines.append(f"  -{pts}: {reason}")
         if status.power_on_hours > 0:
             h = status.power_on_hours
             years = h // (365 * 24)

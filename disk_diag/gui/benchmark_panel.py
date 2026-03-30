@@ -702,8 +702,8 @@ class BenchmarkPanel(QWidget):
             self._rnd_card.set_result(
                 f"{result.random_iops:,.0f} IOPS",
                 f"Avg: {result.random_avg_latency_us:.1f} μs\n"
-                f"P95: {result.random_p95_latency_us:.0f}  /  "
-                f"P99: {result.random_p99_latency_us:.0f} μs",
+                f"P95: {result.random_p95_latency_us:.0f}  P99: {result.random_p99_latency_us:.0f}\n"
+                f"P99.9: {result.random_p999_latency_us:.0f}  P99.99: {result.random_p9999_latency_us:.0f} μs",
             )
 
         # Random 4K Write

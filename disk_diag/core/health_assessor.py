@@ -32,78 +32,79 @@ def _get_attr_current(attributes: list[SmartAttribute], attr_id: int) -> int:
     return -1
 
 
-def _ata_health_score(attributes: list[SmartAttribute]) -> int:
-    """Рассчитать Health Score (0-100) для ATA/SATA по формуле SSD_TESTING_SPEC."""
+def _ata_health_score(attributes: list[SmartAttribute]) -> tuple[int, list]:
+    """Рассчитать Health Score (0-100) с детализацией штрафов."""
     score = 100
+    penalties = []
 
-    # Reallocated Sectors (ID 5) — до 40 баллов (low32: SandForce пакует данные)
+    def penalize(reason: str, points: int):
+        nonlocal score
+        if points > 0:
+            score -= points
+            penalties.append((reason, points))
+
+    # Reallocated Sectors (ID 5)
     realloc = _get_attr_raw_low32(attributes, 5)
     if realloc > 0:
-        score -= min(40, realloc * 2)
+        penalize(tr(f"Reallocated Sectors: {realloc}", f"Переназначенные секторы: {realloc}"),
+                 min(40, realloc * 2))
 
-    # Uncorrectable Errors (ID 187, 198) — до 40 баллов (low32!)
+    # Uncorrectable Errors (ID 187, 198)
     uncorr = max(_get_attr_raw_low32(attributes, 187), _get_attr_raw_low32(attributes, 198))
     if uncorr > 0:
-        score -= min(40, uncorr * 5)
+        penalize(tr(f"Uncorrectable Errors: {uncorr}", f"Неисправимые ошибки: {uncorr}"),
+                 min(40, uncorr * 5))
 
-    # Program Fail (ID 171) — до 30 баллов
+    # Program Fail (ID 171)
     prog_fail = _get_attr_raw(attributes, 171)
     if prog_fail > 0:
-        score -= min(30, prog_fail * 3)
+        penalize(tr(f"Program Fail: {prog_fail}", f"Ошибки программирования: {prog_fail}"),
+                 min(30, prog_fail * 3))
 
-    # Erase Fail (ID 172) — до 30 баллов
+    # Erase Fail (ID 172)
     erase_fail = _get_attr_raw(attributes, 172)
     if erase_fail > 0:
-        score -= min(30, erase_fail * 3)
+        penalize(tr(f"Erase Fail: {erase_fail}", f"Ошибки стирания: {erase_fail}"),
+                 min(30, erase_fail * 3))
 
-    # Pending Sectors (ID 197) — до 20 баллов (low32!)
+    # Pending Sectors (ID 197)
     pending = _get_attr_raw_low32(attributes, 197)
     if pending > 0:
-        score -= min(20, pending * 4)
+        penalize(tr(f"Pending Sectors: {pending}", f"Ожидающие секторы: {pending}"),
+                 min(20, pending * 4))
 
-    # SSD Life Left (ID 231) — current value, 100=новый, 0=мёртвый
+    # SSD Life Left (ID 231)
     life_left = _get_attr_current(attributes, 231)
     if life_left >= 0:
         used_pct = 100 - life_left
-        if used_pct > 100:
-            score -= 30
-        elif used_pct > 90:
-            score -= 25
-        elif used_pct > 80:
-            score -= 15
-        elif used_pct > 50:
-            score -= 5
+        pts = 30 if used_pct > 100 else 25 if used_pct > 90 else 15 if used_pct > 80 else 5 if used_pct > 50 else 0
+        if pts:
+            penalize(tr(f"SSD Wear: {used_pct}%", f"Износ SSD: {used_pct}%"), pts)
 
-    # Wear Leveling (ID 177) — current value
+    # Wear Leveling (ID 177)
     wear = _get_attr_current(attributes, 177)
-    if wear >= 0 and life_left < 0:  # только если нет ID 231
+    if wear >= 0 and life_left < 0:
         used_pct = 100 - wear
-        if used_pct > 90:
-            score -= 25
-        elif used_pct > 80:
-            score -= 15
-        elif used_pct > 50:
-            score -= 5
+        pts = 25 if used_pct > 90 else 15 if used_pct > 80 else 5 if used_pct > 50 else 0
+        if pts:
+            penalize(tr(f"Wear Leveling: {used_pct}%", f"Износ ячеек: {used_pct}%"), pts)
 
-    # Temperature (ID 190, 194) — до 15 баллов
+    # Temperature (ID 190, 194)
     temp = _get_attr_raw(attributes, 194)
     if temp < 0:
         temp = _get_attr_raw(attributes, 190)
     if temp > 0:
         temp = temp & 0xFF
-        if temp > 80:
-            score -= 15
-        elif temp > 70:
-            score -= 10
-        elif temp > 60:
-            score -= 5
+        pts = 15 if temp > 80 else 10 if temp > 70 else 5 if temp > 60 else 0
+        if pts:
+            penalize(tr(f"Temperature: {temp}°C", f"Температура: {temp}°C"), pts)
 
-    # CRC Errors (ID 199) — до 10 баллов
+    # CRC Errors (ID 199)
     crc = _get_attr_raw(attributes, 199)
     if crc > 0:
-        score -= min(10, crc)
+        penalize(tr(f"CRC Errors: {crc}", f"Ошибки CRC: {crc}"), min(10, crc))
 
-    return max(0, score)
+    return max(0, score), penalties
 
 
 def _is_ssd(attributes: list[SmartAttribute]) -> bool:
@@ -173,7 +174,7 @@ def assess_ata_health(attributes: list[SmartAttribute],
         )
 
     # Health Score
-    health_score = _ata_health_score(attributes)
+    health_score, score_penalties = _ata_health_score(attributes)
 
     # TBW (для SSD)
     consumed_tb, rated_tb, remaining_days, daily_write_tb = \
@@ -262,56 +263,62 @@ def assess_ata_health(attributes: list[SmartAttribute],
         tbw_remaining_days=remaining_days,
         daily_write_tb=daily_write_tb,
         power_on_hours=poh,
+        penalties=score_penalties,
     )
 
 
-def _nvme_health_score(info: NvmeHealthInfo) -> int:
-    """Рассчитать Health Score (0-100) для NVMe по формуле из SSD_TESTING_SPEC."""
+def _nvme_health_score(info: NvmeHealthInfo) -> tuple[int, list]:
+    """Рассчитать Health Score (0-100) с детализацией штрафов."""
     score = 100
+    penalties = []
 
-    # Critical Warning (до 30 баллов)
+    def penalize(reason: str, points: int):
+        nonlocal score
+        if points > 0:
+            score -= points
+            penalties.append((reason, points))
+
     if info.critical_warning != 0:
-        score -= 30
+        penalize(tr(f"Critical Warning: 0x{info.critical_warning:02X}",
+                    f"Критическое предупреждение: 0x{info.critical_warning:02X}"), 30)
 
-    # Media Errors (до 40 баллов)
     if info.media_errors > 0:
-        score -= min(40, info.media_errors * 5)
+        penalize(tr(f"Media Errors: {info.media_errors}",
+                    f"Ошибки носителя: {info.media_errors}"), min(40, info.media_errors * 5))
 
-    # Percentage Used (до 30 баллов)
     if info.percentage_used > 100:
-        score -= 30
+        penalize(tr(f"Wear: {info.percentage_used}%", f"Износ: {info.percentage_used}%"), 30)
     elif info.percentage_used > 90:
-        score -= 25
+        penalize(tr(f"Wear: {info.percentage_used}%", f"Износ: {info.percentage_used}%"), 25)
     elif info.percentage_used > 80:
-        score -= 15
+        penalize(tr(f"Wear: {info.percentage_used}%", f"Износ: {info.percentage_used}%"), 15)
     elif info.percentage_used > 50:
-        score -= 5
+        penalize(tr(f"Wear: {info.percentage_used}%", f"Износ: {info.percentage_used}%"), 5)
 
-    # Available Spare (до 20 баллов)
     if not info.wmi_fallback and info.available_spare < info.available_spare_threshold:
-        score -= 20
+        penalize(tr(f"Available Spare: {info.available_spare}%",
+                    f"Доступный резерв: {info.available_spare}%"), 20)
     elif not info.wmi_fallback and info.available_spare < info.available_spare_threshold + 10:
-        score -= 10
+        penalize(tr(f"Available Spare: {info.available_spare}%",
+                    f"Доступный резерв: {info.available_spare}%"), 10)
 
-    # Temperature (до 15 баллов)
-    if info.temperature_celsius > 80:
-        score -= 15
-    elif info.temperature_celsius > 70:
-        score -= 10
-    elif info.temperature_celsius > 60:
-        score -= 5
+    t = info.temperature_celsius
+    pts = 15 if t > 80 else 10 if t > 70 else 5 if t > 60 else 0
+    if pts:
+        penalize(tr(f"Temperature: {t}°C", f"Температура: {t}°C"), pts)
 
-    # Unsafe Shutdowns (до 10 баллов)
     if info.unsafe_shutdowns > 1000:
-        score -= 10
+        penalize(tr(f"Unsafe Shutdowns: {info.unsafe_shutdowns}",
+                    f"Аварийные выключения: {info.unsafe_shutdowns}"), 10)
     elif info.unsafe_shutdowns > 100:
-        score -= 5
+        penalize(tr(f"Unsafe Shutdowns: {info.unsafe_shutdowns}",
+                    f"Аварийные выключения: {info.unsafe_shutdowns}"), 5)
 
-    # Critical Temp Time (до 10 баллов)
     if info.critical_temp_time > 0:
-        score -= 10
+        penalize(tr(f"Critical Temp Time: {info.critical_temp_time} min",
+                    f"Время крит. перегрева: {info.critical_temp_time} мин"), 10)
 
-    return max(0, score)
+    return max(0, score), penalties
 
 
 def _nvme_tbw_and_waf(info: NvmeHealthInfo, capacity_bytes: int = 0):
@@ -364,7 +371,7 @@ def assess_nvme_health(info: NvmeHealthInfo, capacity_bytes: int = 0) -> HealthS
     critical_issues = []
 
     # Health Score
-    health_score = _nvme_health_score(info)
+    health_score, score_penalties = _nvme_health_score(info)
 
     # TBW и WAF
     consumed_tb, rated_tb, remaining_days, daily_write_tb, waf = \
@@ -471,4 +478,5 @@ def assess_nvme_health(info: NvmeHealthInfo, capacity_bytes: int = 0) -> HealthS
         daily_write_tb=daily_write_tb,
         waf=waf,
         power_on_hours=info.power_on_hours if info.power_on_hours > 0 else -1,
+        penalties=score_penalties,
     )
