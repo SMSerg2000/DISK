@@ -34,7 +34,8 @@
       "Bash(python3 -c \":*)",
       "Bash(git reset:*)",
       "Bash(git push:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(ls -la C:/Projects/DISK/docs/USER_GUIDE*.md C:/Projects/DISK/docs/DEVELOPER_GUIDE*.md)"
     ]
   }
 }
