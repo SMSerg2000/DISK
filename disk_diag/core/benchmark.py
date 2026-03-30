@@ -93,9 +93,22 @@ class BenchmarkEngine:
         # Начальная температура
         self._poll_temp(result)
 
-        # Фаза 1: Sequential Read
+        # Фаза 1: Sequential Read (warmup + 3 runs → median)
         if not self._cancelled:
-            self._run_sequential(result, progress)
+            speeds = []
+            runs = 4  # 1 warmup + 3 measured
+            for run in range(runs):
+                if self._cancelled:
+                    break
+                self._run_sequential(result, progress)
+                if run > 0:  # skip warmup
+                    speeds.append(result.sequential_speed_mbps)
+                if progress:
+                    progress("sequential", (run + 1) / runs,
+                             f"Run {run+1}/{runs}: {result.sequential_speed_mbps:.0f} MB/s")
+            if len(speeds) >= 2:
+                speeds.sort()
+                result.sequential_speed_mbps = speeds[len(speeds) // 2]  # median
 
         # Фаза 2: Random 4K Read
         if not self._cancelled:

@@ -4,7 +4,7 @@ import logging
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QPushButton, QProgressBar, QLabel, QCheckBox, QMessageBox,
+    QPushButton, QProgressBar, QLabel, QComboBox, QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QRectF, QPointF
 from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen
@@ -455,12 +455,23 @@ class BenchmarkPanel(QWidget):
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._stop_benchmark)
 
-        self._write_check = QCheckBox(tr("+ Write tests", "+ Тесты записи"))
-        self._write_check.setToolTip(
-            "Добавить тесты записи: Sequential Write + SLC Cache.\n"
-            "⚠️ ДЕСТРУКТИВНО — все данные на диске будут уничтожены!"
+        self._profile_combo = QComboBox()
+        self._profile_combo.setFixedHeight(36)
+        self._profile_combo.setMinimumWidth(140)
+        self._profile_combo.addItem(tr("Quick (read-only)", "Быстрый (чтение)"), "quick")
+        self._profile_combo.addItem(tr("Standard (+ write)", "Стандарт (+ запись)"), "standard")
+        self._profile_combo.addItem(tr("Full (all tests)", "Полный (все тесты)"), "full")
+        self._profile_combo.addItem(tr("Stress (long)", "Стресс (длительный)"), "stress")
+        self._profile_combo.setToolTip(
+            tr("Quick — read-only, safe, ~30 sec\n"
+               "Standard — + basic write tests, ~2 min\n"
+               "Full — all tests including SLC cache, ~5 min\n"
+               "Stress — extended tests with temperature control, ~15 min",
+               "Быстрый — только чтение, безопасно, ~30 сек\n"
+               "Стандарт — + базовые тесты записи, ~2 мин\n"
+               "Полный — все тесты включая SLC кэш, ~5 мин\n"
+               "Стресс — расширенные тесты с контролем температуры, ~15 мин")
         )
-        self._write_check.setStyleSheet("color: #f38ba8;")
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
@@ -472,7 +483,7 @@ class BenchmarkPanel(QWidget):
 
         controls.addWidget(self._btn_start)
         controls.addWidget(self._btn_stop)
-        controls.addWidget(self._write_check)
+        controls.addWidget(self._profile_combo)
         controls.addWidget(self._progress, stretch=1)
         controls.addWidget(self._status)
         layout.addLayout(controls)
@@ -567,7 +578,22 @@ class BenchmarkPanel(QWidget):
         if self._drive_number is None:
             return
 
-        include_write = self._write_check.isChecked()
+        profile = self._profile_combo.currentData()
+        include_write = profile in ("standard", "full", "stress")
+
+        # Pre-check: проверка условий тестирования
+        from ..core.winapi import is_system_drive
+        conditions = []
+        if is_system_drive(self._drive_number):
+            conditions.append(tr("⚠ System disk — OS activity affects results",
+                                 "⚠ Системный диск — активность ОС влияет на результаты"))
+        if self._interface_type == "USB":
+            conditions.append(tr("⚠ USB connection — speed limited by interface",
+                                 "⚠ USB подключение — скорость ограничена интерфейсом"))
+        if conditions:
+            cond_text = "\n".join(conditions)
+            conf = tr("Conditions", "Условия")
+            QMessageBox.information(self, conf, cond_text)
 
         if include_write:
             size_gb = self._capacity_bytes / (1024 ** 3)
@@ -619,7 +645,7 @@ class BenchmarkPanel(QWidget):
         self._clear_results()
         self._btn_start.setEnabled(False)
         self._btn_stop.setEnabled(True)
-        self._write_check.setEnabled(False)
+        self._profile_combo.setEnabled(False)
         self._status.setText(tr("Running...", "Выполняется..."))
         self._status.setStyleSheet("color: #cdd6f4;")
 
@@ -643,7 +669,7 @@ class BenchmarkPanel(QWidget):
         self._status.setStyleSheet("color: #f9e2af;")
 
     def _on_progress(self, phase: str, pct: float, message: str):
-        if self._write_check.isChecked():
+        if self._profile_combo.currentData() in ("standard", "full", "stress"):
             phase_map = {
                 "sequential": (0, 8, "Seq Read"),
                 "random":     (8, 8, "4K Read"),
@@ -670,7 +696,7 @@ class BenchmarkPanel(QWidget):
         self._progress.setValue(100)
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
-        self._write_check.setEnabled(True)
+        self._profile_combo.setEnabled(True)
 
         if result.io_errors:
             err_count = len(result.io_errors)
@@ -779,6 +805,6 @@ class BenchmarkPanel(QWidget):
     def _on_error(self, error_msg: str):
         self._btn_start.setEnabled(self._drive_number is not None)
         self._btn_stop.setEnabled(False)
-        self._write_check.setEnabled(True)
+        self._profile_combo.setEnabled(True)
         self._status.setText(f"{tr("Error", "Ошибка")}: {error_msg}")
         self._status.setStyleSheet("color: #f38ba8;")
