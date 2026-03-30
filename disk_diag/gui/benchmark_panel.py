@@ -30,10 +30,11 @@ class _BenchmarkWorker(QObject):
     error = Signal(str)
 
     def __init__(self, drive_number: int, capacity_bytes: int,
-                 include_write: bool = False, interface_type: str = ""):
+                 include_write: bool = False, interface_type: str = "",
+                 profile: str = "quick"):
         super().__init__()
         self._engine = BenchmarkEngine(drive_number, capacity_bytes,
-                                       include_write, interface_type)
+                                       include_write, interface_type, profile)
 
     def run(self):
         try:
@@ -650,7 +651,7 @@ class BenchmarkPanel(QWidget):
         self._status.setStyleSheet("color: #cdd6f4;")
 
         self._worker = _BenchmarkWorker(self._drive_number, self._capacity_bytes,
-                                        include_write, self._interface_type)
+                                        include_write, self._interface_type, profile)
         self._thread = QThread()
         self._worker.moveToThread(self._thread)
 
@@ -790,6 +791,28 @@ class BenchmarkPanel(QWidget):
                 card_info = phase_cards.get(phase)
                 if card_info and card_info[1] == 0:
                     card_info[0].set_result(f"✗ {err_label}", err.split(": ", 1)[-1][:60])
+
+        # Baseline comparison
+        if result.sequential_speed_mbps > 0:
+            from ..data.baselines import compare_to_baseline
+            comparisons = compare_to_baseline(
+                self._interface_type,
+                seq_read=result.sequential_speed_mbps,
+                seq_write=result.seq_write_speed_mbps,
+                rand_4k_read_iops=result.random_iops,
+                rand_4k_write_iops=result.random_write_iops,
+            )
+            if comparisons:
+                cls_name = comparisons[0]["class"]
+                fails = [c for c in comparisons if c["verdict"] == "fail"]
+                warns = [c for c in comparisons if c["verdict"] == "warn"]
+                if fails:
+                    base_msg = f"{tr('Below baseline', 'Ниже эталона')} ({cls_name}): {fails[0]['metric']}"
+                    self._status.setText(f"{tr('Done', 'Готово')} — {base_msg}")
+                    self._status.setStyleSheet("color: #f9e2af;")
+                elif warns:
+                    base_msg = f"{tr('Near baseline', 'Около эталона')} ({cls_name})"
+                    self._status.setText(f"{tr('Done', 'Готово')} — {base_msg}")
 
         # Charts
         if result.latency_points:

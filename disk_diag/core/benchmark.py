@@ -63,10 +63,16 @@ class BenchmarkEngine:
 
     def __init__(self, drive_number: int, capacity_bytes: int,
                  include_write: bool = False,
-                 interface_type: str = ""):
+                 interface_type: str = "",
+                 profile: str = "quick"):
         self.drive_number = drive_number
         self.capacity_bytes = capacity_bytes
         self.include_write = include_write
+        self.profile = profile
+        # Stress profile: увеличиваем объёмы
+        if profile == "stress":
+            self.VERIFY_TOTAL = 1024 * 1024 * 1024  # 1 GB
+            self.SLC_MAX_GB = 100  # 100 GB
         self.interface_type = interface_type
         self._cancelled = False
         self._bench_start: float = 0.0

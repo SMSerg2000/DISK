@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v1.8.0
+# DISK Diagnostic Tool v2.0.0
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -112,7 +112,8 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **1.8.0** | WAF calculation, test history (SQLite), Health Score breakdown, test profiles, JSON export, warm-up+median, P99.9/P99.99, pre-check conditions |
+| **2.0.0** | CLI mode, baseline comparison, Stress profile (1GB verify, 100GB SLC), extended verify |
+| 1.8.0 | WAF calculation, test history (SQLite), Health Score breakdown, test profiles, JSON export, warm-up+median, P99.9/P99.99, pre-check conditions |
 | 1.7.0 | Health Score penalties, P99.9 latency, JSON export, documentation (4 guides) |
 | 1.6.0 | Volume lock/dismount for ALL write modes, Refresh "Refreshed" label |
 | 1.4.4 | SandForce packed raw fix (20-bit POH mask), false WARNING fix (current=100), new SMART attrs (13, 204, 230) |
