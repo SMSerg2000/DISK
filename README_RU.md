@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v2.0.0
+# DISK Diagnostic Tool v2.1.0
 
 <p align="center">
   <b>Утилита диагностики SSD/HDD для Windows — аналог <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -112,7 +112,8 @@ disk_diag/
 
 | Версия | Изменения |
 |--------|-----------|
-| **2.0.0** | CLI режим, сравнение с эталонами, Stress профиль (1ГБ verify, 100ГБ SLC), расширенный verify |
+| **2.1.0** | Vendor-specific SMART decoder (7 профилей: SandForce, Kingston, Transcend, Intel, Samsung, SanDisk) |
+| 2.0.0 | CLI режим, сравнение с эталонами, Stress профиль (1ГБ verify, 100ГБ SLC), расширенный verify |
 | 1.8.0 | WAF расчёт, история тестов (SQLite), расшифровка Health Score, профили тестов, JSON экспорт, warm-up+медиана, P99.9/P99.99, проверка условий |
 | 1.7.0 | Расшифровка штрафов Health Score, P99.9 латентность, JSON экспорт, документация (4 руководства) |
 | 1.6.0 | Lock/dismount для всех режимов записи, Refresh "Обновлено" |

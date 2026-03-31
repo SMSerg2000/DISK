@@ -53,8 +53,11 @@ class SmartTableWidget(QTableWidget):
                 return
         self.description_changed.emit("")
 
-    def set_ata_attributes(self, attributes: list[SmartAttribute]):
+    def set_ata_attributes(self, attributes: list[SmartAttribute],
+                          model: str = "", firmware: str = ""):
         """Заполнить таблицу ATA SMART-атрибутами."""
+        from ..data.vendor_profiles import match_profile, get_decoded_tooltip
+        _vp = match_profile(model, firmware)
         self.setSortingEnabled(False)
         self.clear()
 
@@ -116,6 +119,9 @@ class SmartTableWidget(QTableWidget):
                 low16 = attr.raw_value & 0xFFFF
                 low32 = attr.raw_value & 0xFFFFFFFF
                 tip += f"\nLow16: {low16:,}  |  Low32: {low32:,}"
+            dec_tip = get_decoded_tooltip(_vp, attr.id, attr.raw_value)
+            if dec_tip:
+                tip += f"\n{dec_tip}"
             raw_item.setToolTip(tip)
 
             # Status

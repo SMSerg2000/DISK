@@ -4,6 +4,7 @@ from .models import (
     SmartAttribute, NvmeHealthInfo, HealthStatus, HealthLevel,
 )
 from ..data.smart_db import is_critical_attribute
+from ..data.vendor_profiles import match_profile, decode_raw
 from ..i18n import tr
 
 
@@ -32,7 +33,8 @@ def _get_attr_current(attributes: list[SmartAttribute], attr_id: int) -> int:
     return -1
 
 
-def _ata_health_score(attributes: list[SmartAttribute]) -> tuple[int, list]:
+def _ata_health_score(attributes: list[SmartAttribute],
+                      profile=None) -> tuple[int, list]:
     """Рассчитать Health Score (0-100) с детализацией штрафов."""
     score = 100
     penalties = []
@@ -43,14 +45,26 @@ def _ata_health_score(attributes: list[SmartAttribute]) -> tuple[int, list]:
             score -= points
             penalties.append((reason, points))
 
+    def decoded(attr_id):
+        """Получить decoded raw через vendor profile (или low32 fallback)."""
+        raw = _get_attr_raw(attributes, attr_id)
+        if raw <= 0:
+            return raw
+        if profile:
+            return decode_raw(profile, attr_id, raw)
+        # Fallback: low32 для критических (SandForce совместимость)
+        if attr_id in (5, 196, 197, 198, 187):
+            return raw & 0xFFFFFFFF
+        return raw
+
     # Reallocated Sectors (ID 5)
-    realloc = _get_attr_raw_low32(attributes, 5)
+    realloc = decoded(5)
     if realloc > 0:
         penalize(tr(f"Reallocated Sectors: {realloc}", f"Переназначенные секторы: {realloc}"),
                  min(40, realloc * 2))
 
     # Uncorrectable Errors (ID 187, 198)
-    uncorr = max(_get_attr_raw_low32(attributes, 187), _get_attr_raw_low32(attributes, 198))
+    uncorr = max(decoded(187), decoded(198))
     if uncorr > 0:
         penalize(tr(f"Uncorrectable Errors: {uncorr}", f"Неисправимые ошибки: {uncorr}"),
                  min(40, uncorr * 5))
@@ -68,7 +82,7 @@ def _ata_health_score(attributes: list[SmartAttribute]) -> tuple[int, list]:
                  min(30, erase_fail * 3))
 
     # Pending Sectors (ID 197)
-    pending = _get_attr_raw_low32(attributes, 197)
+    pending = decoded(197)
     if pending > 0:
         penalize(tr(f"Pending Sectors: {pending}", f"Ожидающие секторы: {pending}"),
                  min(20, pending * 4))
@@ -113,7 +127,7 @@ def _is_ssd(attributes: list[SmartAttribute]) -> bool:
     return any(a.id in ssd_ids for a in attributes)
 
 
-def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0):
+def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0, profile=None):
     """Рассчитать TBW для ATA SSD. Для HDD возвращает -1.
 
     Returns: (consumed_tb, rated_tb, remaining_days, daily_write_tb)
@@ -142,9 +156,9 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0):
         capacity_tb = capacity_bytes / (1024 ** 4)
         rated_tb = capacity_tb * 600
 
-    # Прогноз жизни (SandForce: 20-битная маска для POH)
+    # Прогноз жизни (decoded POH через vendor profile)
     poh_raw = _get_attr_raw(attributes, 9)
-    power_on_hours = poh_raw & 0xFFFFF if poh_raw > 1_000_000 else poh_raw
+    power_on_hours = decode_raw(profile, 9, poh_raw) if poh_raw > 0 else -1
     if consumed_tb > 0 and power_on_hours is not None and power_on_hours > 24:
         power_on_days = power_on_hours / 24.0
         daily_write_tb = consumed_tb / power_on_days
@@ -170,12 +184,16 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0):
 
 
 def assess_ata_health(attributes: list[SmartAttribute],
-                      capacity_bytes: int = 0) -> HealthStatus:
+                      capacity_bytes: int = 0,
+                      model: str = "", firmware: str = "") -> HealthStatus:
     """Оценить здоровье ATA/SATA диска по SMART-атрибутам.
 
     Health Score (0-100) по формуле SSD_TESTING_SPEC.
     TBW расчёт для SSD (атрибуты 241, 233).
+    Vendor profile для корректного декодирования packed raw.
     """
+    # Vendor profile
+    _profile = match_profile(model, firmware)
     warnings = []
     critical_issues = []
 
@@ -187,12 +205,12 @@ def assess_ata_health(attributes: list[SmartAttribute],
             health_score=-1,
         )
 
-    # Health Score
-    health_score, score_penalties = _ata_health_score(attributes)
+    # Health Score (с vendor profile для корректного декодирования)
+    health_score, score_penalties = _ata_health_score(attributes, _profile)
 
     # TBW (для SSD)
     consumed_tb, rated_tb, remaining_days, daily_write_tb, waf = \
-        _ata_tbw(attributes, capacity_bytes)
+        _ata_tbw(attributes, capacity_bytes, _profile)
 
     for attr in attributes:
         is_critical = is_critical_attribute(attr.id)
@@ -215,10 +233,9 @@ def assess_ata_health(attributes: list[SmartAttribute],
                 f"приближается к threshold={attr.threshold}"
             )
 
-        # Переназначенные/нестабильные/неисправимые секторы — low32 raw > 0
-        # (SandForce и др. контроллеры пакуют вспомогательные данные в верхние байты)
+        # Переназначенные/нестабильные/неисправимые секторы — decoded raw > 0
         if attr.id in (5, 196, 197, 198):
-            raw_low = attr.raw_value & 0xFFFFFFFF
+            raw_low = decode_raw(_profile, attr.id, attr.raw_value)
             if raw_low > 100:
                 critical_issues.append(
                     f"{attr.name} (ID {attr.id}): raw={raw_low} — критическое количество!"
@@ -228,9 +245,9 @@ def assess_ata_health(attributes: list[SmartAttribute],
                     f"{attr.name} (ID {attr.id}): raw={raw_low} — обнаружены проблемные секторы"
                 )
 
-        # Температура > 55°C
+        # Температура > 55°C (decoded через profile)
         if attr.id in (190, 194):
-            temp = attr.raw_value & 0xFF
+            temp = decode_raw(_profile, attr.id, attr.raw_value)
             if temp > 60:
                 critical_issues.append(f"Температура: {temp}°C — критический перегрев!")
             elif temp > 55:
@@ -244,16 +261,11 @@ def assess_ata_health(attributes: list[SmartAttribute],
         elif pct > 70:
             warnings.append(f"TBW: {pct:.0f}% ресурса записи израсходовано")
 
-    # Power-On Hours (ID 9)
-    # SandForce SF-2281: часы в нижних 20 битах (raw & 0xFFFFF)
-    # Нормальные контроллеры: raw = реальные часы
+    # Power-On Hours (ID 9) — decoded через vendor profile
     poh_raw = _get_attr_raw(attributes, 9)
     poh = -1
     if poh_raw > 0:
-        if poh_raw > 1_000_000:
-            poh = poh_raw & 0xFFFFF  # SandForce: 20-битная маска
-        else:
-            poh = poh_raw
+        poh = decode_raw(_profile, 9, poh_raw)
 
     # Уровень по score + issues
     if critical_issues:

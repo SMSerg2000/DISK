@@ -55,7 +55,7 @@ class _SmartWorker(QObject):
                 with DeviceHandle(dn) as h:
                     attrs = read_smart_via_sat(h)
                 if attrs:
-                    status = assess_ata_health(attrs, cap)
+                    status = assess_ata_health(attrs, cap, self.drive_info.model, self.drive_info.firmware_revision)
                     self.finished.emit(("ata", attrs, status))
                     return
                 # 2) USB-NVMe: vendor bridge (JMicron/ASMedia/Realtek)
@@ -75,7 +75,7 @@ class _SmartWorker(QObject):
             elif self.drive_info.smart_supported:
                 with DeviceHandle(self.drive_info.drive_number) as h:
                     attrs = read_smart_attributes(h, self.drive_info.drive_number)
-                    status = assess_ata_health(attrs, cap)
+                    status = assess_ata_health(attrs, cap, self.drive_info.model, self.drive_info.firmware_revision)
                     self.finished.emit(("ata", attrs, status))
             else:
                 self.finished.emit(("none", None, None))
@@ -288,7 +288,9 @@ class MainWindow(QMainWindow):
             self._smart_ata_attrs = attrs
             self._smart_status = status
             self._export_action.setEnabled(True)
-            self._smart_table.set_ata_attributes(attrs)
+            drive = self._drive_selector.get_selected_drive()
+            self._smart_table.set_ata_attributes(
+                attrs, drive.model if drive else "", drive.firmware_revision if drive else "")
             self._health_indicator.set_status(status)
 
             # Обновляем тип диска и температуру по SMART данным
