@@ -139,7 +139,7 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0, profile=
 
     # TBW имеет смысл только для SSD
     if not _is_ssd(attributes):
-        return consumed_tb, rated_tb, remaining_days, daily_write_tb
+        return consumed_tb, rated_tb, remaining_days, daily_write_tb, -1.0
 
     # Total Host Writes: ID 241 (в LBA секторах) или ID 233 (vendor-specific)
     host_writes_lba = _get_attr_raw(attributes, 241)

@@ -147,20 +147,36 @@ def match_profile(model: str, firmware: str = "") -> Optional[dict]:
     return None
 
 
+    # Универсальные правила — НЕ зависят от vendor profile
+_DEFAULT_DECODE = {
+    190: "low8",   # Airflow Temperature — ВСЕГДА low byte
+    194: "low8",   # Temperature — ВСЕГДА low byte
+}
+
+
 def decode_raw(profile: Optional[dict], attr_id: int, raw_value: int) -> int:
     """Декодировать raw-значение атрибута через профиль.
 
-    Если профиля нет или атрибут не описан — возвращает raw как есть.
+    Для температуры (190, 194) — всегда low byte, даже без профиля.
+    Для остальных без профиля — возвращает raw как есть.
     """
-    if not profile or "decode" not in profile:
-        return raw_value
+    # Сначала ищем в профиле
+    if profile and "decode" in profile:
+        rule = profile["decode"].get(attr_id)
+        if rule:
+            method = rule.get("method", "raw")
+            return _apply_method(method, raw_value)
 
-    rule = profile["decode"].get(attr_id)
-    if not rule:
-        return raw_value
+    # Дефолтные правила (температура и т.д.)
+    default_method = _DEFAULT_DECODE.get(attr_id)
+    if default_method:
+        return _apply_method(default_method, raw_value)
 
-    method = rule.get("method", "raw")
+    return raw_value
 
+
+def _apply_method(method: str, raw_value: int) -> int:
+    """Применить метод декодирования к raw-значению."""
     if method == "raw":
         return raw_value
     elif method == "low8":
