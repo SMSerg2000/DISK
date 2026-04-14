@@ -1,4 +1,4 @@
 """DISK Diagnostic Tool — диагностика SSD и HDD дисков."""
 
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 __app_name__ = "DISK Diagnostic Tool"

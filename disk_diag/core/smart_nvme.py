@@ -60,8 +60,12 @@ def _parse_raw_health(health_data: bytes) -> NvmeHealthInfo:
     power_cycles = _parse_128bit(health_data[offset:offset + 16]); offset += 16
     power_on_hours = _parse_128bit(health_data[offset:offset + 16]); offset += 16
     unsafe_shutdowns = _parse_128bit(health_data[offset:offset + 16]); offset += 16
-    media_errors = _parse_128bit(health_data[offset:offset + 16]); offset += 16
-    error_log_entries = _parse_128bit(health_data[offset:offset + 16]); offset += 16
+    # Счётчики ошибок: некоторые firmware (SK hynix BC711) пишут мусор в
+    # старшие байты — ограничиваем 64 битами (больше 2^64 ошибок невозможно)
+    media_errors = _parse_128bit(health_data[offset:offset + 16]) & 0xFFFFFFFFFFFFFFFF
+    offset += 16
+    error_log_entries = _parse_128bit(health_data[offset:offset + 16]) & 0xFFFFFFFFFFFFFFFF
+    offset += 16
 
     # Warning/Critical temperature time (4 bytes each)
     warning_temp_time = struct.unpack_from("<I", health_data, offset)[0]; offset += 4
