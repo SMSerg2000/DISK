@@ -616,7 +616,8 @@ class MainWindow(QMainWindow):
                 lines.append(f"Score:      {s.health_score}/100")
             if s.penalties:
                 for reason, pts in s.penalties:
-                    lines.append(f"  -{pts}: {reason}")
+                    pts_lbl = tr("pt", "балл") if pts == 1 else tr("pts", "балла" if pts < 5 else "баллов")
+                    lines.append(f"  −{pts} {pts_lbl}: {reason}")
             if s.tbw_consumed_tb > 0:
                 lines.append(f"TBW {tr('used', 'использовано')}:   {s.tbw_consumed_tb:.1f} TB")
             if s.tbw_rated_tb > 0:

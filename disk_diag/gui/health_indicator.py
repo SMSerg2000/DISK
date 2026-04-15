@@ -76,7 +76,8 @@ class HealthIndicator(QFrame):
             extra_lines.append(f"Health Score: {status.health_score}/100")
         if status.penalties:
             for reason, pts in status.penalties:
-                extra_lines.append(f"  -{pts}: {reason}")
+                pts_lbl = tr("pt", "балл") if pts == 1 else tr("pts", "балла" if pts < 5 else "баллов")
+                extra_lines.append(f"  −{pts} {pts_lbl}: {reason}")
         if status.power_on_hours > 0:
             h = status.power_on_hours
             years = h // (365 * 24)
