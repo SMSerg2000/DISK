@@ -99,6 +99,15 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
                "Количество ошибок CRC (Kingston SSD)", False),
 
     # === Silicon Motion / Transcend SSD ===
+    150: _a(150, "Worst Block Erase Count",       "Худший счётчик стираний",
+               "Worst block erase count (Silicon Motion SM2258/SM2259)",
+               "Худший счётчик стираний блока (Silicon Motion SM2258/SM2259)", False),
+    151: _a(151, "Best Block Erase Count",        "Лучший счётчик стираний",
+               "Best block erase count (Silicon Motion SM2258/SM2259)",
+               "Лучший счётчик стираний блока (Silicon Motion SM2258/SM2259)", False),
+    159: _a(159, "DRAM ECC Errors",               "Ошибки DRAM ECC",
+               "DRAM 1-bit ECC error count (Silicon Motion)",
+               "Количество однобитных ECC-ошибок DRAM (Silicon Motion)", False),
     160: _a(160, "Uncorrectable Sector Count",    "Неисправимые секторы",
                "Uncorrectable sector count (Silicon Motion SSD)",
                "Количество неисправимых секторов (Silicon Motion SSD)", True),
