@@ -185,6 +185,17 @@ def enumerate_drives() -> list[DriveInfo]:
                 capacity = _get_capacity(h)
                 interface = _bus_type_to_interface(bus_type)
 
+                # Эвристика: если bus_type=Unknown, но модель содержит "NVMe"
+                # (некоторые OEM драйверы возвращают нестандартный bus_type для
+                # SK hynix BC511, KBG, HFM* и других NVMe SSD)
+                if interface == InterfaceType.UNKNOWN:
+                    model_upper = model.upper()
+                    if ("NVME" in model_upper or
+                            model_upper.startswith(("HFM", "KBG", "PM9", "MZ"))):
+                        interface = InterfaceType.NVME
+                        logger.info(f"PhysicalDrive{n}: bus_type unknown but "
+                                    f"model looks NVMe → forced NVME")
+
                 # SMART support check — пробуем для ATA/SATA/USB
                 # (некоторые USB-SATA мосты поддерживают SAT passthrough)
                 smart_supported = False
