@@ -397,6 +397,23 @@ def assess_nvme_health(info: NvmeHealthInfo, capacity_bytes: int = 0) -> HealthS
     warnings = []
     critical_issues = []
 
+    # OEM драйверы (Intel RST/VMD) блокируют NVMe IOCTLs — WMI fallback может
+    # вернуть только температуру, остальное = 0. Без POH/записей/циклов нечем
+    # штрафовать → ложный GOOD 100/100. Честнее показать UNKNOWN.
+    if (info.wmi_fallback
+            and info.power_on_hours <= 0
+            and info.data_units_written <= 0
+            and info.power_cycles <= 0):
+        return HealthStatus(
+            level=HealthLevel.UNKNOWN,
+            summary=tr(
+                "Insufficient SMART data for health assessment (OEM driver)",
+                "Недостаточно данных SMART для оценки (OEM-драйвер)"
+            ),
+            health_score=-1,
+            power_on_hours=-1,
+        )
+
     # Health Score
     health_score, score_penalties = _nvme_health_score(info)
 
