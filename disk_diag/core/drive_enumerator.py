@@ -35,6 +35,25 @@ def _extract_string(buffer: bytes, offset: int) -> str:
     return buffer[offset:end].decode("ascii", errors="replace").strip()
 
 
+def _looks_generic_usb_model(model: str) -> bool:
+    """Проверить, похожа ли модель на обобщённое имя USB-кармана.
+
+    Дешёвые USB-мосты часто отдают через STORAGE_QUERY_PROPERTY обобщённое
+    имя вместо реальной модели диска внутри. В таких случаях надо тянуть
+    модель через ATA IDENTIFY DEVICE поверх SAT.
+    """
+    m = model.strip().lower()
+    if not m or m == "unknown":
+        return True
+    generics = (
+        "mass storage device", "mass storage", "usb mass storage",
+        "usb device", "usb hdd", "usb ssd",
+        "external hdd", "external ssd", "external usb",
+        "ata device", "scsi disk device",
+    )
+    return any(g in m for g in generics)
+
+
 def _bus_type_to_interface(bus_type: int) -> InterfaceType:
     """Преобразовать STORAGE_BUS_TYPE в InterfaceType."""
     if bus_type == BusTypeNvme:
@@ -195,6 +214,36 @@ def enumerate_drives() -> list[DriveInfo]:
                         interface = InterfaceType.NVME
                         logger.info(f"PhysicalDrive{n}: bus_type unknown but "
                                     f"model looks NVMe → forced NVME")
+
+                # USB-карман с обобщённым именем — попробуем достать
+                # настоящую модель/серийник/прошивку через ATA IDENTIFY DEVICE.
+                # SCSI/ATA Pass-Through требует write access, поэтому
+                # открываем отдельный handle с read_only=False
+                if (interface == InterfaceType.USB
+                        and _looks_generic_usb_model(model)):
+                    try:
+                        from .smart_ata import identify_device_via_sat
+                        with DeviceHandle(n, read_only=False) as h_rw:
+                            ata_model, ata_serial, ata_fw = \
+                                identify_device_via_sat(h_rw)
+                        if ata_model:
+                            logger.info(
+                                f"PhysicalDrive{n}: STORAGE_QUERY_PROPERTY gave "
+                                f"'{model}', SAT IDENTIFY → '{ata_model}'"
+                            )
+                            model = ata_model
+                            if ata_serial:
+                                serial = ata_serial
+                            if ata_fw:
+                                firmware = ata_fw
+                    except (DriveNotFound, AdminPrivilegeRequired):
+                        logger.debug(
+                            f"PhysicalDrive{n}: cannot reopen for SAT IDENTIFY"
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"PhysicalDrive{n}: SAT IDENTIFY failed ({e})"
+                        )
 
                 # SMART support check — пробуем для ATA/SATA/USB
                 # (некоторые USB-SATA мосты поддерживают SAT passthrough)

@@ -476,3 +476,224 @@ def get_temperature_from_smart(attributes: list[SmartAttribute]) -> int | None:
         if attr.id in (194, 190):  # Temperature, Airflow Temperature
             return attr.raw_value & 0xFF
     return None
+
+
+# ============================================================================
+# ATA IDENTIFY DEVICE через SAT — для USB-карманов, которые отдают
+# generic-имя ("Mass Storage Device") в STORAGE_QUERY_PROPERTY
+# ============================================================================
+
+
+def _ata_string(data: bytes, offset: int, length: int) -> str:
+    """Декодировать ATA-строку (байты в каждом 16-битном слове swap'аются).
+
+    ATA IDENTIFY хранит ASCII в формате "слова big-endian": 'WD' = байты 'D','W'.
+    Поля паддятся пробелами или NUL'ами — оба нужно убрать.
+    """
+    if offset + length > len(data) or length <= 0:
+        return ""
+    chunk = bytearray(data[offset:offset + length])
+    for i in range(0, length - 1, 2):
+        chunk[i], chunk[i + 1] = chunk[i + 1], chunk[i]
+    text = chunk.decode("ascii", errors="replace")
+    return text.strip().strip("\x00").strip()
+
+
+def _scsi_inquiry_vpd_ata_info(handle: DeviceHandle) -> bytes:
+    """Прочитать SCSI INQUIRY VPD page 0x89 (ATA Information).
+
+    По спецификации SAT (SCSI/ATA Translation), мост обязан отдавать копию
+    ответа ATA IDENTIFY DEVICE начиная с offset 60 страницы. Это работает
+    на USB-мостах, которые не пропускают прямой ATA Pass-Through (16),
+    но соблюдают SAT.
+
+    Returns:
+        Полный буфер VPD page 0x89 (>= 572 байт) или b"".
+    """
+    header_size = ctypes.sizeof(SCSI_PASS_THROUGH)
+    sense_size = 32
+    data_size = 572  # 60 (header) + 512 (IDENTIFY data)
+    sense_offset = header_size
+    data_offset = (sense_offset + sense_size + 7) & ~7
+    total_size = data_offset + data_size
+
+    buf = bytearray(total_size)
+
+    struct.pack_into("<H", buf, 0, header_size)
+    buf[6] = 12                         # CdbLength (INQUIRY = 6 или 12 байт)
+    buf[7] = sense_size
+    buf[8] = SCSI_IOCTL_DATA_IN
+
+    struct.pack_into("<I", buf, SCSI_PASS_THROUGH.DataTransferLength.offset, data_size)
+    struct.pack_into("<I", buf, SCSI_PASS_THROUGH.TimeOutValue.offset, 10)
+
+    dbo_offset = SCSI_PASS_THROUGH.DataBufferOffset.offset
+    if ctypes.sizeof(ctypes.c_size_t) == 8:
+        struct.pack_into("<Q", buf, dbo_offset, data_offset)
+    else:
+        struct.pack_into("<I", buf, dbo_offset, data_offset)
+
+    struct.pack_into("<I", buf, SCSI_PASS_THROUGH.SenseInfoOffset.offset, sense_offset)
+
+    # CDB: SCSI INQUIRY (12 bytes max — opcode 0x12)
+    cdb_offset = SCSI_PASS_THROUGH.Cdb.offset
+    buf[cdb_offset + 0] = 0x12          # INQUIRY
+    buf[cdb_offset + 1] = 0x01          # EVPD = 1 (запрашиваем VPD page)
+    buf[cdb_offset + 2] = 0x89          # Page Code = ATA Information
+    # Allocation Length (BE 16-bit) в bytes 3-4
+    struct.pack_into(">H", buf, cdb_offset + 3, data_size)
+    buf[cdb_offset + 5] = 0             # Control
+
+    result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+
+    if len(result) >= data_offset + 60:
+        return result[data_offset:data_offset + data_size]
+    return b""
+
+
+def _scsi_sat_identify_device(handle: DeviceHandle) -> bytes:
+    """Послать ATA IDENTIFY DEVICE (0xEC) через IOCTL_SCSI_PASS_THROUGH + SAT CDB.
+
+    Returns:
+        512 байт ответа IDENTIFY или b"" если не удалось.
+    """
+    header_size = ctypes.sizeof(SCSI_PASS_THROUGH)
+    sense_size = 32
+    data_size = 512
+    sense_offset = header_size
+    data_offset = (sense_offset + sense_size + 7) & ~7
+    total_size = data_offset + data_size
+
+    buf = bytearray(total_size)
+
+    struct.pack_into("<H", buf, 0, header_size)        # Length
+    buf[6] = 16                                         # CdbLength
+    buf[7] = sense_size                                 # SenseInfoLength
+    buf[8] = SCSI_IOCTL_DATA_IN                         # DataIn
+
+    struct.pack_into("<I", buf, SCSI_PASS_THROUGH.DataTransferLength.offset, data_size)
+    struct.pack_into("<I", buf, SCSI_PASS_THROUGH.TimeOutValue.offset, 10)
+
+    dbo_offset = SCSI_PASS_THROUGH.DataBufferOffset.offset
+    if ctypes.sizeof(ctypes.c_size_t) == 8:
+        struct.pack_into("<Q", buf, dbo_offset, data_offset)
+    else:
+        struct.pack_into("<I", buf, dbo_offset, data_offset)
+
+    struct.pack_into("<I", buf, SCSI_PASS_THROUGH.SenseInfoOffset.offset, sense_offset)
+
+    # CDB: ATA Pass-Through (16) — IDENTIFY DEVICE (0xEC)
+    cdb_offset = SCSI_PASS_THROUGH.Cdb.offset
+    buf[cdb_offset + 0] = 0x85          # ATA PASS-THROUGH (16)
+    buf[cdb_offset + 1] = (4 << 1)      # protocol = PIO Data-In
+    buf[cdb_offset + 2] = 0x0E          # t_length=2(SC), byt_blok=1, t_dir=1
+    buf[cdb_offset + 6] = 1              # Sector Count
+    buf[cdb_offset + 13] = 0xA0          # Device
+    buf[cdb_offset + 14] = 0xEC          # Command = IDENTIFY DEVICE
+
+    result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+
+    if len(result) >= data_offset + 512:
+        return result[data_offset:data_offset + 512]
+    return b""
+
+
+def _ata_pt_identify_device(handle: DeviceHandle) -> bytes:
+    """Послать ATA IDENTIFY DEVICE через IOCTL_ATA_PASS_THROUGH (без SCSI обёртки).
+
+    Используется как первый вариант для USB-мостов, которые поддерживают ATA PT.
+    """
+    header_size = ctypes.sizeof(ATA_PASS_THROUGH_EX)
+    data_size = 512
+    total_size = header_size + data_size
+
+    buf = bytearray(total_size)
+
+    struct.pack_into("<H", buf, 0, header_size)               # Length
+    struct.pack_into("<H", buf, 2,
+                     ATA_FLAGS_DRDY_REQUIRED | ATA_FLAGS_DATA_IN)  # AtaFlags
+    struct.pack_into("<I", buf, 8, data_size)                 # DataTransferLength
+    struct.pack_into("<I", buf, 12, 10)                        # TimeOutValue (10s)
+
+    dbo_offset = ATA_PASS_THROUGH_EX.DataBufferOffset.offset
+    if ctypes.sizeof(ctypes.c_size_t) == 8:
+        struct.pack_into("<Q", buf, dbo_offset, header_size)
+    else:
+        struct.pack_into("<I", buf, dbo_offset, header_size)
+
+    ctf_offset = ATA_PASS_THROUGH_EX.CurrentTaskFile.offset
+    buf[ctf_offset + 0] = 0       # Features
+    buf[ctf_offset + 1] = 1       # Sector Count
+    buf[ctf_offset + 2] = 0       # LBA Low
+    buf[ctf_offset + 3] = 0       # LBA Mid (NOT SMART signature!)
+    buf[ctf_offset + 4] = 0       # LBA High
+    buf[ctf_offset + 5] = 0xA0    # Device/Head
+    buf[ctf_offset + 6] = 0xEC    # Command = IDENTIFY DEVICE
+
+    result = handle.ioctl_raw(IOCTL_ATA_PASS_THROUGH, bytes(buf), total_size)
+
+    if len(result) >= header_size + 512:
+        return result[header_size:header_size + 512]
+    return b""
+
+
+def _parse_identify_response(data: bytes) -> tuple[str, str, str]:
+    """Распарсить 512 байт ответа IDENTIFY DEVICE → (model, serial, firmware).
+
+    Words 10-19 (offset 20, len 20): Serial Number
+    Words 23-26 (offset 46, len 8):  Firmware Revision
+    Words 27-46 (offset 54, len 40): Model Number
+    """
+    if len(data) < 512:
+        return ("", "", "")
+    serial = _ata_string(data, 20, 20)
+    firmware = _ata_string(data, 46, 8)
+    model = _ata_string(data, 54, 40)
+    return (model, serial, firmware)
+
+
+def identify_device_via_sat(handle: DeviceHandle) -> tuple[str, str, str]:
+    """Прочитать model/serial/firmware через цепочку SAT-запросов.
+
+    Цепочка fallback:
+      1. SCSI INQUIRY VPD page 0x89 (ATA Information) — самый надёжный для USB
+      2. IOCTL_ATA_PASS_THROUGH с командой IDENTIFY DEVICE (0xEC)
+      3. IOCTL_SCSI_PASS_THROUGH + SAT CDB (ATA Pass-Through 16) с 0xEC
+
+    Используется для USB-карманов, у которых STORAGE_QUERY_PROPERTY возвращает
+    обобщённое имя вроде "Mass Storage Device" вместо реальной модели.
+
+    Returns:
+        (model, serial, firmware) — или ("", "", "") если ничего не вышло.
+    """
+    # 1. VPD page 0x89: данные IDENTIFY DEVICE начинаются с offset 60
+    try:
+        vpd = _scsi_inquiry_vpd_ata_info(handle)
+        if len(vpd) >= 60 + 512:
+            page_code = vpd[1] if len(vpd) > 1 else 0
+            if page_code == 0x89:
+                identify = vpd[60:60 + 512]
+                model, serial, firmware = _parse_identify_response(identify)
+                if model:
+                    logger.info(f"IDENTIFY via VPD 0x89: model='{model}'")
+                    return (model, serial, firmware)
+    except (IoctlFailed, OSError) as e:
+        logger.debug(f"IDENTIFY via VPD 0x89 failed: {e}")
+
+    # 2 & 3. Прямой IDENTIFY DEVICE (для мостов, которые пропускают ATA PT)
+    for method_name, fn in (
+        ("ATA PT", _ata_pt_identify_device),
+        ("SCSI SAT", _scsi_sat_identify_device),
+    ):
+        try:
+            data = fn(handle)
+            if len(data) >= 512:
+                model, serial, firmware = _parse_identify_response(data)
+                if model:
+                    logger.info(f"IDENTIFY via {method_name}: model='{model}'")
+                    return (model, serial, firmware)
+        except (IoctlFailed, OSError) as e:
+            logger.debug(f"IDENTIFY via {method_name} failed: {e}")
+            continue
+
+    return ("", "", "")
