@@ -255,6 +255,18 @@ def enumerate_drives() -> list[DriveInfo]:
                 elif interface == InterfaceType.NVME:
                     smart_supported = True
                     smart_enabled = True
+                elif interface == InterfaceType.UNKNOWN:
+                    # Intel RST/VMD и другие OEM SATA-драйверы возвращают
+                    # bus_type=Unknown для обычных SATA SSD. Если SMART_GET_VERSION
+                    # отвечает — это SATA, не NVMe (NVMe-эвристика по модели уже
+                    # отработала выше).
+                    smart_supported, smart_enabled = _check_smart_support(h)
+                    if smart_supported:
+                        interface = InterfaceType.SATA
+                        logger.info(
+                            f"PhysicalDrive{n}: bus_type unknown but SMART works "
+                            f"→ forced SATA (likely Intel RST/VMD)"
+                        )
 
                 # Определение SSD vs HDD
                 if interface == InterfaceType.NVME:
