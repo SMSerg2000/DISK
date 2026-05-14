@@ -35,6 +35,42 @@ def _extract_string(buffer: bytes, offset: int) -> str:
     return buffer[offset:end].decode("ascii", errors="replace").strip()
 
 
+def _detect_hypervisor(model: str) -> str:
+    """Распознать гипервизор по строке модели.
+
+    Виртуальные диски не имеют SMART физически — это абстракция гипервизора
+    над хранилищем (LVM, NFS, Ceph, аппаратный RAID и т.п.). Полезно явно
+    помечать их, чтобы пользователь понимал, почему SMART недоступен.
+
+    Returns:
+        Имя гипервизора ("KVM/QEMU (VirtIO)", "Hyper-V", ...) или "" если
+        диск не виртуальный.
+    """
+    m = model.strip().lower()
+    if not m:
+        return ""
+    # Порядок важен: более специфичные совпадения сначала
+    if "virtio" in m or "red hat" in m:
+        return "KVM/QEMU (VirtIO)"
+    if m.startswith("qemu") or "qemu harddisk" in m:
+        return "QEMU"
+    if "msft virtual" in m or "microsoft virtual" in m:
+        return "Hyper-V"
+    if "vmware" in m:
+        return "VMware"
+    if "vbox" in m or "virtualbox" in m:
+        return "VirtualBox"
+    if "xen" in m or "citrix" in m:
+        return "Xen/Citrix"
+    if "parallels" in m:
+        return "Parallels"
+    if "google " in m and "persistentdisk" in m:
+        return "Google Cloud"
+    if m.startswith("nvme amazon") or "amazon elastic" in m:
+        return "AWS EBS"
+    return ""
+
+
 def _looks_generic_usb_model(model: str) -> bool:
     """Проверить, похожа ли модель на обобщённое имя USB-кармана.
 
@@ -204,6 +240,17 @@ def enumerate_drives() -> list[DriveInfo]:
                 capacity = _get_capacity(h)
                 interface = _bus_type_to_interface(bus_type)
 
+                # Виртуальный диск гипервизора (VirtIO, Hyper-V, VMware, ...)
+                # У них нет физического SMART — это абстракция над хранилищем
+                # на гипервизоре. Помечаем явно, чтобы GUI показал осмысленное
+                # сообщение вместо унылого "Unknown / SMART не поддерживается".
+                hypervisor = _detect_hypervisor(model)
+                if hypervisor:
+                    interface = InterfaceType.VIRTUAL
+                    logger.info(
+                        f"PhysicalDrive{n}: virtual disk → {hypervisor}"
+                    )
+
                 # Эвристика: если bus_type=Unknown, но модель содержит "NVMe"
                 # (некоторые OEM драйверы возвращают нестандартный bus_type для
                 # SK hynix BC511, KBG, HFM* и других NVMe SSD)
@@ -285,6 +332,7 @@ def enumerate_drives() -> list[DriveInfo]:
                     bus_type_raw=bus_type,
                     smart_supported=smart_supported,
                     smart_enabled=smart_enabled,
+                    hypervisor=hypervisor,
                 )
                 drives.append(drive)
                 logger.info(f"Found: {drive.display_name}")

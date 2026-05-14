@@ -16,6 +16,7 @@ class InterfaceType(Enum):
     USB = "USB"
     SCSI = "SCSI"
     ATA = "ATA"
+    VIRTUAL = "Virtual"
     UNKNOWN = "Unknown"
 
 
@@ -39,6 +40,7 @@ class DriveInfo:
     rotation_rate: int = 0  # 0=unknown, 1=SSD(non-rotating), >1=RPM
     smart_supported: bool = False
     smart_enabled: bool = False
+    hypervisor: str = ""  # пустая если физический диск, иначе "KVM/QEMU (VirtIO)" и т.п.
 
     @property
     def display_name(self) -> str:

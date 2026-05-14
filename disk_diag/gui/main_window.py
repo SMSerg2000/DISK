@@ -249,11 +249,42 @@ class MainWindow(QMainWindow):
         drive = self._drives[index]
         self._info_panel.set_drive_info(drive)
         self._health_indicator.clear()
-        self._smart_table.show_message(tr("Reading SMART...", "Чтение SMART..."))
         self._benchmark_panel.set_drive(drive.drive_number, drive.capacity_bytes,
                                        drive.interface_type.value, drive.model)
         self._surface_panel.set_drive(drive.drive_number, drive.capacity_bytes,
                                       drive.model)
+
+        # Виртуальные диски (VirtIO, Hyper-V, VMware, ...) не имеют физического
+        # SMART — это абстракция гипервизора над хранилищем. Показываем
+        # осмысленное сообщение и не пытаемся читать.
+        if drive.interface_type == InterfaceType.VIRTUAL:
+            hv = drive.hypervisor or tr("Virtual disk", "Виртуальный диск")
+            msg = tr(
+                f"🌐 {hv} — virtual disk\n\n"
+                f"SMART is not available on virtualized storage by design.\n"
+                f"For physical diagnostics, use tools on the hypervisor:\n"
+                f"  • smartctl -a /dev/sdX  (Linux host)\n"
+                f"  • storcli / megacli / perccli  (LSI/Broadcom HW RAID)\n"
+                f"  • zpool status  (ZFS)\n"
+                f"  • mdadm --detail  (Linux software RAID)",
+
+                f"🌐 {hv} — виртуальный диск\n\n"
+                f"SMART недоступен по архитектуре виртуализации.\n"
+                f"Для физической диагностики используйте инструменты на гипервизоре:\n"
+                f"  • smartctl -a /dev/sdX  (Linux хост)\n"
+                f"  • storcli / megacli / perccli  (LSI/Broadcom HW RAID)\n"
+                f"  • zpool status  (ZFS)\n"
+                f"  • mdadm --detail  (Linux software RAID)"
+            )
+            self._smart_table.show_message(msg)
+            self._statusbar.showMessage(
+                tr(f"Virtual disk: {hv}", f"Виртуальный диск: {hv}"), 5000
+            )
+            self._smart_data_type = "none"
+            self._export_action.setEnabled(False)
+            return
+
+        self._smart_table.show_message(tr("Reading SMART...", "Чтение SMART..."))
         self._statusbar.showMessage(f"{tr("Reading SMART", "Чтение SMART")}: {drive.model.strip()}...", 10000)
 
         # Запуск чтения SMART в фоновом потоке

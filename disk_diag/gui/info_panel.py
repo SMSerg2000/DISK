@@ -57,8 +57,14 @@ class InfoPanel(QGroupBox):
         self._fields["serial"][1].setText(info.serial_number or "Н/Д")
         self._fields["firmware"][1].setText(info.firmware_revision or "Н/Д")
         self._fields["capacity"][1].setText(format_capacity(info.capacity_bytes))
-        self._fields["interface"][1].setText(info.interface_type.value)
-        self._fields["type"][1].setText(info.drive_type.value)
+        # Для виртуальных дисков показываем имя гипервизора в интерфейсе
+        from ..core.models import InterfaceType
+        if info.interface_type == InterfaceType.VIRTUAL and info.hypervisor:
+            self._fields["interface"][1].setText(f"Virtual ({info.hypervisor})")
+            self._fields["type"][1].setText(tr("Virtual", "Виртуальный"))
+        else:
+            self._fields["interface"][1].setText(info.interface_type.value)
+            self._fields["type"][1].setText(info.drive_type.value)
 
         # Температура
         if temperature is not None:
@@ -81,7 +87,10 @@ class InfoPanel(QGroupBox):
             self._fields["temperature"][1].setStyleSheet("color: #cdd6f4;")
 
         # SMART
-        if info.smart_supported:
+        if info.interface_type == InterfaceType.VIRTUAL:
+            smart_text = tr("N/A (virtual disk)", "Н/Д (виртуальный диск)")
+            self._fields["smart"][1].setStyleSheet("color: #89b4fa; font-weight: bold;")
+        elif info.smart_supported:
             smart_text = tr("Supported, Enabled", "Поддерживается") if info.smart_enabled else tr("Supported, Disabled", "Поддерживается, отключён")
             self._fields["smart"][1].setStyleSheet("color: #a6e3a1; font-weight: bold;")
         else:
