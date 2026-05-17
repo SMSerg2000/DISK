@@ -152,6 +152,13 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
     177: _a(177, "Wear Leveling Count",           "Выравнивание износа",
                "Wear leveling cycle count (SSD)",
                "Счётчик выравнивания износа flash (SSD)", False),
+    178: _a(178, "Used Reserved Block Count Total", "Использ. резервные блоки",
+               "Total count of reserved blocks used to replace failed ones "
+               "(Phison/Silicon Motion/Intel/Marvell SSD). Growing value is "
+               "a precursor to spare pool exhaustion.",
+               "Использованные резервные блоки для подмены битых "
+               "(Phison/Silicon Motion/Intel/Marvell SSD). Рост значения — "
+               "предвестник исчерпания резервного пула.", True),
     180: _a(180, "Unused Reserved Block Count",   "Неисп. резервные блоки",
                "Unused reserved block count",
                "Количество неиспользованных резервных блоков", True),
