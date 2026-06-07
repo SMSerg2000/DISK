@@ -470,8 +470,15 @@ def is_system_drive(drive_number: int) -> bool:
         _CloseHandle(h)
 
 
-def _try_lock_volume(vol_path: str, drive_number: int, label: str) -> int | None:
-    """Попробовать открыть, проверить диск, заблокировать и размонтировать том."""
+def _try_lock_volume(vol_path: str, drive_number: int, label: str) -> tuple:
+    """Попробовать открыть, проверить диск, заблокировать и размонтировать том.
+
+    Returns:
+        (handle_or_None, locked_ok_bool, dismounted_ok_bool)
+        - handle = None если том не на этом диске или не открылся
+        - locked_ok = False если LOCK_VOLUME упал (handle всё равно возвращается)
+        - dismounted_ok = False если DISMOUNT_VOLUME упал
+    """
     import struct
     try:
         h = _CreateFileW(vol_path, GENERIC_READ | GENERIC_WRITE,
@@ -479,9 +486,9 @@ def _try_lock_volume(vol_path: str, drive_number: int, label: str) -> int | None
                          None, OPEN_EXISTING, 0, None)
         handle_val = h if isinstance(h, int) else ctypes.cast(h, ctypes.c_void_p).value
         if handle_val is None or handle_val == _INVALID_HANDLE:
-            return None
+            return (None, False, False)
     except Exception:
-        return None
+        return (None, False, False)
 
     # Проверяем, на каком физическом диске этот том
     try:
@@ -494,31 +501,31 @@ def _try_lock_volume(vol_path: str, drive_number: int, label: str) -> int | None
             disk_num = struct.unpack_from("<I", bytes(out_buf), 8)[0]
             if disk_num != drive_number:
                 _CloseHandle(h)
-                return None
+                return (None, False, False)
         else:
             _CloseHandle(h)
-            return None
+            return (None, False, False)
     except Exception:
         _CloseHandle(h)
-        return None
+        return (None, False, False)
 
     # Блокируем и размонтируем
     dummy = wintypes.DWORD(0)
-    ok = _DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0,
-                          ctypes.byref(dummy), None)
-    if ok:
+    locked = bool(_DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0,
+                                    ctypes.byref(dummy), None))
+    if locked:
         logger.info(f"Locked volume {label}")
     else:
         logger.warning(f"Failed to lock volume {label}")
 
-    ok = _DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
-                          ctypes.byref(dummy), None)
-    if ok:
+    dismounted = bool(_DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
+                                        ctypes.byref(dummy), None))
+    if dismounted:
         logger.info(f"Dismounted volume {label}")
     else:
         logger.warning(f"Failed to dismount volume {label}")
 
-    return h
+    return (h, locked, dismounted)
 
 
 # FindFirstVolumeW / FindNextVolumeW
@@ -535,24 +542,54 @@ _FindVolumeClose.restype = wintypes.BOOL
 _FindVolumeClose.argtypes = [wintypes.HANDLE]
 
 
-def lock_and_dismount_volumes(drive_number: int) -> list:
+class VolumeLockResult:
+    """Результат блокировки томов на физическом диске.
+
+    Атрибуты:
+        handles: список открытых volume handle'ов (передавать в unlock_volumes)
+        failed_volumes: список меток томов, у которых lock или dismount упал
+                        (даже если handle был получен — это unsafe для destructive)
+    """
+    __slots__ = ("handles", "failed_volumes")
+
+    def __init__(self, handles: list, failed_volumes: list):
+        self.handles = handles
+        self.failed_volumes = failed_volumes
+
+
+def lock_and_dismount_volumes(drive_number: int) -> VolumeLockResult:
     """Заблокировать и размонтировать ВСЕ тома на физическом диске.
 
     Ищет тома двумя способами:
     1. По буквам A-Z (обычные тома)
     2. Через FindFirstVolumeW (скрытые тома: EFI, Recovery и т.д.)
 
-    Возвращает список открытых handle'ов (закрыть после записи!).
+    Returns:
+        VolumeLockResult с handles (для unlock_volumes) и failed_volumes.
+        ВАЖНО: если failed_volumes непустой — destructive операции должны
+        отказаться от продолжения (fail-closed). Звонящий код решает сам
+        как реагировать (raise / abort / warn).
     """
     volume_handles = []
+    failed_volumes = []
     seen_paths = set()
+
+    def _process(h_result: tuple, label: str):
+        """Обработать результат _try_lock_volume и обновить списки."""
+        h, locked, dismounted = h_result
+        if h is None:
+            return
+        volume_handles.append(h)
+        if not (locked and dismounted):
+            failed_volumes.append(label)
 
     # 1) Буквенные тома (A-Z)
     for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         vol_path = f"\\\\.\\{letter}:"
-        h = _try_lock_volume(vol_path, drive_number, f"{letter}:")
-        if h is not None:
-            volume_handles.append(h)
+        label = f"{letter}:"
+        result = _try_lock_volume(vol_path, drive_number, label)
+        if result[0] is not None:
+            _process(result, label)
             seen_paths.add(vol_path)
 
     # 2) Все тома через FindFirstVolumeW (включая скрытые без букв)
@@ -561,7 +598,7 @@ def lock_and_dismount_volumes(drive_number: int) -> list:
         find_h = _FindFirstVolumeW(buf, 260)
         handle_val = find_h if isinstance(find_h, int) else ctypes.cast(find_h, ctypes.c_void_p).value
         if handle_val is None or handle_val == _INVALID_HANDLE:
-            return volume_handles
+            return VolumeLockResult(volume_handles, failed_volumes)
 
         while True:
             vol_guid = buf.value  # \\?\Volume{GUID}\
@@ -572,9 +609,10 @@ def lock_and_dismount_volumes(drive_number: int) -> list:
                 vol_path = vol_guid
 
             if vol_path not in seen_paths:
-                h = _try_lock_volume(vol_path, drive_number, vol_guid[:40])
-                if h is not None:
-                    volume_handles.append(h)
+                label = vol_guid[:40]
+                result = _try_lock_volume(vol_path, drive_number, label)
+                if result[0] is not None:
+                    _process(result, label)
                     seen_paths.add(vol_path)
 
             if not _FindNextVolumeW(find_h, buf, 260):
@@ -584,7 +622,7 @@ def lock_and_dismount_volumes(drive_number: int) -> list:
     except Exception as e:
         logger.debug(f"FindFirstVolume enumeration failed: {e}")
 
-    return volume_handles
+    return VolumeLockResult(volume_handles, failed_volumes)
 
 
 def unlock_volumes(handles: list):

@@ -170,10 +170,21 @@ def cmd_smart(drive_number: int, as_json: bool):
     return 0
 
 
-def cmd_benchmark(drive_number: int, include_write: bool):
-    """Запустить бенчмарк."""
+def cmd_benchmark(drive_number: int, include_write: bool,
+                  yes: bool = False, force_system: bool = False,
+                  profile: str = "quick"):
+    """Запустить бенчмарк.
+
+    Args:
+        drive_number: номер физического диска
+        include_write: запускать write-тесты (деструктивно!)
+        yes: пропустить интерактивное подтверждение
+        force_system: разрешить write на системном диске (опасно!)
+        profile: quick/standard/full/stress
+    """
     from disk_diag.core.drive_enumerator import enumerate_drives
     from disk_diag.core.benchmark import BenchmarkEngine
+    from disk_diag.core.winapi import is_system_drive
 
     drives = enumerate_drives()
     drive = None
@@ -185,13 +196,66 @@ def cmd_benchmark(drive_number: int, include_write: bool):
         print(f"Disk {drive_number} not found.")
         return 1
 
-    print(f"Benchmarking: {drive.model.strip()} ({drive.capacity_bytes / (1024**3):.1f} GB)")
+    size_gb = drive.capacity_bytes / (1024**3)
+    print(f"Benchmarking: {drive.model.strip()} ({size_gb:.1f} GB)")
+    print(f"  Serial:    {drive.serial_number or 'N/A'}")
+    print(f"  Interface: {drive.interface_type.value}")
+    print(f"  Profile:   {profile}")
+
+    # === Safety gate для write-тестов ===
+    if include_write:
+        if profile == "quick":
+            # Quick + write — противоречивая комбинация; повышаем до standard
+            profile = "standard"
+            print(f"  (auto-bumped profile quick→standard because --write specified)")
+
+        # Печатаем план записи
+        slc_gb = 100 if profile == "stress" else (50 if profile == "full" else 0)
+        verify_mb = 1024 if profile == "stress" else 256
+        print()
+        print("⚠️  WRITE TESTS PLAN (DESTRUCTIVE):")
+        print(f"   • Sequential Write:   512 MB starting at offset 1 GB (MBR/GPT protected)")
+        print(f"   • Random 4K Write:    1000 ops at random LBAs")
+        print(f"   • Mixed I/O 70/30:    30 sec random R+W")
+        print(f"   • Write-Read-Verify:  {verify_mb} MB")
+        if slc_gb > 0:
+            print(f"   • SLC Cache Test:     up to {slc_gb} GB sequential write")
+        print(f"   All existing data on PhysicalDrive{drive_number} will be DESTROYED.")
+        print()
+
+        # Системный диск — отдельная защита
+        if is_system_drive(drive_number):
+            print("🔴 THIS IS THE SYSTEM DISK (Windows is installed on it).")
+            print("   Running write tests will make the computer unbootable.")
+            if not force_system:
+                print("   Refusing without --force-system-drive flag.")
+                return 2
+            print("   --force-system-drive given. Proceeding (you have been warned).")
+
+        # Подтверждение по serial number — самый надёжный signal
+        if not yes:
+            target_serial = (drive.serial_number or "").strip()
+            if target_serial:
+                prompt = (f"\nType the disk serial '{target_serial}' to confirm "
+                          f"destructive write tests: ")
+            else:
+                prompt = f"\nType 'DESTROY' to confirm destructive write tests: "
+                target_serial = "DESTROY"
+            try:
+                entered = input(prompt).strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nAborted.")
+                return 130
+            if entered != target_serial:
+                print(f"Mismatch. Got '{entered}', expected '{target_serial}'. Aborted.")
+                return 3
+            print("Confirmed. Starting benchmark.\n")
 
     def progress(phase, pct, msg):
         print(f"\r  [{phase}] {pct*100:.0f}% {msg}          ", end="", flush=True)
 
     engine = BenchmarkEngine(drive_number, drive.capacity_bytes,
-                             include_write, drive.interface_type.value)
+                             include_write, drive.interface_type.value, profile)
     result = engine.run(progress=progress)
     print()
 
@@ -261,7 +325,15 @@ def main():
     parser.add_argument("--list", action="store_true", help="List all drives")
     parser.add_argument("--smart", type=int, metavar="N", help="Read SMART from disk N")
     parser.add_argument("--benchmark", type=int, metavar="N", help="Benchmark disk N")
-    parser.add_argument("--write", action="store_true", help="Include write tests (destructive!)")
+    parser.add_argument("--write", action="store_true",
+                        help="Include write tests (destructive! requires interactive confirmation)")
+    parser.add_argument("--profile", type=str, default="quick",
+                        choices=["quick", "standard", "full", "stress"],
+                        help="Benchmark profile (default: quick)")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Skip interactive confirmation for --write (use with care!)")
+    parser.add_argument("--force-system-drive", action="store_true",
+                        help="Allow destructive writes on the system disk (DANGEROUS!)")
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
     parser.add_argument("--history", type=str, metavar="SERIAL", help="Show test history (or 'all')")
 
@@ -272,7 +344,10 @@ def main():
     elif args.smart is not None:
         sys.exit(cmd_smart(args.smart, args.json))
     elif args.benchmark is not None:
-        sys.exit(cmd_benchmark(args.benchmark, args.write))
+        sys.exit(cmd_benchmark(args.benchmark, args.write,
+                               yes=args.yes,
+                               force_system=args.force_system_drive,
+                               profile=args.profile))
     elif args.history:
         sys.exit(cmd_history(args.history))
     else:

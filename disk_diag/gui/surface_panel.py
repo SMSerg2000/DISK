@@ -705,10 +705,29 @@ class SurfaceScanPanel(QWidget):
         start_bytes = start_lba * 512
         end_bytes = end_lba * 512 if end_lba > 0 else 0
 
-        self._worker = _SurfaceScanWorker(
-            self._drive_number, self._capacity_bytes, block_size, mode,
-            erase_slow, start_bytes, end_bytes,
-        )
+        # Валидация диапазона до создания worker'а
+        try:
+            self._worker = _SurfaceScanWorker(
+                self._drive_number, self._capacity_bytes, block_size, mode,
+                erase_slow, start_bytes, end_bytes,
+            )
+        except ValueError as e:
+            from PySide6.QtWidgets import QMessageBox
+            self._mode_combo.setEnabled(True)
+            self._slow_check.setEnabled(True)
+            self._from_edit.setEnabled(True)
+            self._to_edit.setEnabled(True)
+            self._scan_btn.setEnabled(True)
+            self._stop_btn.setEnabled(False)
+            self._status.setText(tr("Invalid range", "Неверный диапазон"))
+            self._status.setStyleSheet("color: #f38ba8;")
+            QMessageBox.warning(
+                self,
+                tr("Invalid Scan Range", "Неверный диапазон сканирования"),
+                tr(f"Cannot start scan:\n\n{e}",
+                   f"Невозможно запустить сканирование:\n\n{e}")
+            )
+            return
 
         # Инициализация карты
         self._block_map.reset(self._worker.total_blocks)

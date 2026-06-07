@@ -1,8 +1,8 @@
-# DISK Diagnostic Tool v2.1.0
+# DISK Diagnostic Tool v2.3.0
 
 <p align="center">
   <b>Утилита диагностики SSD/HDD для Windows — аналог <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
-  Python 3.14 + PySide6 | Windows API (ctypes) | Без внешних библиотек для дисков
+  Python 3.12+ + PySide6 | Windows API (ctypes) | Без внешних библиотек для дисков
 </p>
 
 🇬🇧 [English documentation](README.md)

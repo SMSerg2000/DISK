@@ -465,13 +465,13 @@ class BenchmarkPanel(QWidget):
         self._profile_combo.addItem(tr("Stress (long)", "Стресс (длительный)"), "stress")
         self._profile_combo.setToolTip(
             tr("Quick — read-only, safe, ~30 sec\n"
-               "Standard — + basic write tests, ~2 min\n"
-               "Full — all tests including SLC cache, ~5 min\n"
-               "Stress — extended tests with temperature control, ~15 min",
+               "Standard — + seq/random/mixed/verify writes (no SLC), ~2 min\n"
+               "Full — all tests + SLC cache @ 50 GB, ~5 min\n"
+               "Stress — verify 1 GB + SLC cache @ 100 GB, ~15 min",
                "Быстрый — только чтение, безопасно, ~30 сек\n"
-               "Стандарт — + базовые тесты записи, ~2 мин\n"
-               "Полный — все тесты включая SLC кэш, ~5 мин\n"
-               "Стресс — расширенные тесты с контролем температуры, ~15 мин")
+               "Стандарт — + seq/random/mixed/verify запись (без SLC), ~2 мин\n"
+               "Полный — все тесты + SLC кэш @ 50 GB, ~5 мин\n"
+               "Стресс — verify 1 GB + SLC кэш @ 100 GB, ~15 мин")
         )
 
         self._progress = QProgressBar()
@@ -598,20 +598,30 @@ class BenchmarkPanel(QWidget):
 
         if include_write:
             size_gb = self._capacity_bytes / (1024 ** 3)
+            # Точный план записи по выбранному профилю
+            include_slc = profile in ("full", "stress")
+            slc_gb = 100 if profile == "stress" else (50 if profile == "full" else 0)
+            verify_mb = 1024 if profile == "stress" else 256
+            slc_line_en = f"SLC Cache: up to {slc_gb} GB\n" if include_slc else ""
+            slc_line_ru = f"SLC Cache: запись до {slc_gb} GB\n" if include_slc else ""
             reply = QMessageBox.warning(
                 self, tr("Benchmark — Write Tests", "Бенчмарк — Тесты записи"),
                 tr(
                     f"⚠️ Write tests will DESTROY ALL DATA on the disk!\n\n"
-                    f"Disk: {self._model.strip()} ({size_gb:.1f} GB)\n\n"
-                    f"Sequential Write: 512 MB\n"
-                    f"Random 4K Write + Mixed I/O + Verify\n"
-                    f"SLC Cache: up to 50 GB\n\n"
+                    f"Disk: {self._model.strip()} ({size_gb:.1f} GB)\n"
+                    f"Profile: {profile}\n\n"
+                    f"Sequential Write: 512 MB (skipping first 1 GB to protect MBR/GPT)\n"
+                    f"Random 4K Write + Mixed I/O\n"
+                    f"Write-Read-Verify: {verify_mb} MB\n"
+                    f"{slc_line_en}\n"
                     f"ARE YOU SURE?",
                     f"⚠️ Тесты записи УНИЧТОЖАТ ВСЕ ДАННЫЕ на диске!\n\n"
-                    f"Диск: {self._model.strip()} ({size_gb:.1f} GB)\n\n"
-                    f"Sequential Write: запись 512 MB\n"
-                    f"Random 4K Write + Mixed I/O + Verify\n"
-                    f"SLC Cache: запись до 50 GB\n\n"
+                    f"Диск: {self._model.strip()} ({size_gb:.1f} GB)\n"
+                    f"Профиль: {profile}\n\n"
+                    f"Sequential Write: 512 MB (первый 1 GB пропускается для защиты MBR/GPT)\n"
+                    f"Random 4K Write + Mixed I/O\n"
+                    f"Write-Read-Verify: {verify_mb} MB\n"
+                    f"{slc_line_ru}\n"
                     f"ВЫ УВЕРЕНЫ?",
                 ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,

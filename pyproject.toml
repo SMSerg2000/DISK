@@ -1,0 +1,41 @@
+[project]
+name = "disk_diag"
+version = "2.3.0"
+description = "Windows SMART/SSD/HDD diagnostic tool — Victoria HDD analog on Python + PySide6"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Serg" },
+]
+keywords = ["smart", "ssd", "hdd", "diagnostic", "windows", "nvme"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Hardware",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "PySide6>=6.6.0",
+]
+
+[project.scripts]
+disk_diag = "cli:main"
+
+[project.urls]
+Repository = "https://github.com/SMSerg2000/DISK"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["disk_diag", "disk_diag.core", "disk_diag.data", "disk_diag.gui", "disk_diag.utils"]

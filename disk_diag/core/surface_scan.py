@@ -73,9 +73,30 @@ class SurfaceScanEngine:
         self.mode = mode
         self.erase_slow = erase_slow
         # Диапазон сканирования (0 = начало/конец диска)
+        # Range validation — отсекаем невалидные диапазоны до открытия диска
+        if start_offset < 0:
+            raise ValueError(f"start_offset must be >= 0, got {start_offset}")
+        if end_offset < 0:
+            raise ValueError(f"end_offset must be >= 0, got {end_offset}")
+        if capacity_bytes <= 0:
+            raise ValueError(f"capacity_bytes must be > 0, got {capacity_bytes}")
+        if block_size <= 0:
+            raise ValueError(f"block_size must be > 0, got {block_size}")
+
         self.start_offset = (start_offset // block_size) * block_size  # выравниваем
-        self.end_offset = end_offset if end_offset > 0 else capacity_bytes
-        self.end_offset = (self.end_offset // block_size) * block_size
+        effective_end = end_offset if end_offset > 0 else capacity_bytes
+        self.end_offset = (effective_end // block_size) * block_size
+
+        if self.start_offset >= self.end_offset:
+            raise ValueError(
+                f"Invalid range: start_offset ({self.start_offset}) >= "
+                f"end_offset ({self.end_offset})"
+            )
+        if self.end_offset > capacity_bytes:
+            raise ValueError(
+                f"end_offset ({self.end_offset}) exceeds capacity ({capacity_bytes})"
+            )
+
         self._cancelled = False
 
     def cancel(self):
@@ -86,8 +107,8 @@ class SurfaceScanEngine:
     def total_blocks(self) -> int:
         """Общее количество блоков для сканирования."""
         scan_bytes = self.end_offset - self.start_offset
-        n = scan_bytes // self.block_size
-        return max(n, 1)
+        # max(n, 1) НЕ нужен — невалидные диапазоны отсекаются в __init__
+        return scan_bytes // self.block_size
 
     def scan(
         self,
@@ -102,21 +123,54 @@ class SurfaceScanEngine:
         writing = self.mode != ScanMode.IGNORE
 
         result = SurfaceScanResult(total_blocks=total)
-        counts = {cat.value: 0 for cat in BlockCategory if cat != BlockCategory.PENDING}
-        consecutive_errors = 0
-        need_seek = False
 
         if progress_callback:
             progress_callback(0.0, "Starting surface scan...")
 
         # Блокируем и размонтируем тома для ВСЕХ режимов записи
-        # (без этого Windows блокирует запись в области смонтированных разделов)
+        # (без этого Windows блокирует запись в области смонтированных разделов).
+        # Для destructive режима требуем УСПЕШНОГО lock всех томов — fail-closed.
         volume_handles = []
         if writing:
             if progress_callback:
                 progress_callback(0.0, "Locking volumes...")
-            volume_handles = lock_and_dismount_volumes(self.drive_number)
+            lock_result = lock_and_dismount_volumes(self.drive_number)
+            volume_handles = lock_result.handles
             logger.info(f"Locked {len(volume_handles)} volume(s) on drive {self.drive_number}")
+            if lock_result.failed_volumes:
+                msg = (f"Failed to lock {len(lock_result.failed_volumes)} volume(s) "
+                       f"on drive {self.drive_number}: "
+                       f"{', '.join(lock_result.failed_volumes)}")
+                logger.error(msg)
+                unlock_volumes(volume_handles)
+                raise DiskAccessError(msg)
+
+        # Защита от утечки volume-handles: даже при exception внутри основного
+        # цикла volume_handles ОБЯЗАТЕЛЬНО разблокируются в finally.
+        try:
+            return self._do_scan(
+                result, total, bs, writing,
+                block_callback, progress_callback, bad_sector_callback,
+            )
+        finally:
+            if volume_handles:
+                unlock_volumes(volume_handles)
+                logger.info(f"Unlocked {len(volume_handles)} volume(s)")
+
+    def _do_scan(
+        self,
+        result: SurfaceScanResult,
+        total: int,
+        bs: int,
+        writing: bool,
+        block_callback: Optional[BlockCallback],
+        progress_callback: Optional[ProgressCallback],
+        bad_sector_callback: Optional[BadSectorCallback],
+    ) -> SurfaceScanResult:
+        """Основной цикл сканирования (вызывается из scan() внутри try/finally)."""
+        counts = {cat.value: 0 for cat in BlockCategory if cat != BlockCategory.PENDING}
+        consecutive_errors = 0
+        need_seek = False
 
         scan_start = time.perf_counter()
 
@@ -260,16 +314,11 @@ class SurfaceScanEngine:
                             scanned_bytes = (i + 1) * bs
                             speed_mbps = scanned_bytes / (1024 * 1024) / elapsed if elapsed > 0 else 0
                             pct = (i + 1) / total
-                            progress_callback(pct, f"{speed_mbps:.1f} MB/s \u2014 {pct * 100:.1f}%")
+                            progress_callback(pct, f"{speed_mbps:.1f} MB/s — {pct * 100:.1f}%")
                 finally:
                     sector_buf.free()
                     if write_buf:
                         write_buf.free()
-
-        # Разблокируем тома после записи
-        if volume_handles:
-            unlock_volumes(volume_handles)
-            logger.info(f"Unlocked {len(volume_handles)} volume(s)")
 
         elapsed = time.perf_counter() - scan_start
         scanned_bytes = result.scanned_blocks * bs

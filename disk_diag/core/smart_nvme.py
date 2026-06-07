@@ -42,9 +42,14 @@ def _parse_raw_health(health_data: bytes) -> NvmeHealthInfo:
 
     critical_warning = health_data[0]
 
-    # Temperature: 2 bytes little-endian, в Кельвинах
+    # Temperature: 2 bytes little-endian, в Кельвинах.
+    # Sanity check: если поле не инициализировано (0 K) или мусор, не показываем
+    # -273°C / нереалистичные значения. Реалистичный диапазон 200-400 K (-73..127°C).
     temp_kelvin = struct.unpack_from("<H", health_data, 1)[0]
-    temp_celsius = temp_kelvin - 273
+    if 200 <= temp_kelvin <= 400:
+        temp_celsius = temp_kelvin - 273
+    else:
+        temp_celsius = 0  # 0 = unknown, GUI/score логика уже его игнорирует
 
     available_spare = health_data[3]
     available_spare_threshold = health_data[4]

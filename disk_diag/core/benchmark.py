@@ -54,21 +54,38 @@ class BenchmarkEngine:
     SEQUENTIAL_BLOCK = 1024 * 1024           # 1 MB
     SEQUENTIAL_TOTAL = 512 * 1024 * 1024     # 512 MB
     RANDOM_BLOCK = 4096                       # 4 KB
-    RANDOM_COUNT = 1000                       # количество случайных чтений/записей
+    RANDOM_READ_COUNT = 5000                  # random reads (для P95/P99/P99.9)
+    RANDOM_WRITE_COUNT = 1000                 # random writes (меньше — жалко ресурс)
+    # Совместимость: оставляем RANDOM_COUNT как алиас для старого кода
+    RANDOM_COUNT = 5000
     SLC_MAX_GB = 50                           # макс. объём записи SLC-теста (ГБ)
     SLC_SAMPLE_MB = 100                       # замер скорости каждые N МБ
+    SLC_CLIFF_RATIO = 0.6                     # cliff = current < initial × ratio
     SWEEP_SAMPLE_MB = 50                      # замер при sweep каждые N МБ
     SWEEP_MAX_GB = 0                          # 0 = весь диск
     TEMP_INTERVAL_SEC = 5                     # опрос температуры
+    # Защита партиций: пропускаем первый GB при seq write (MBR/GPT/EFI/boot)
+    MBR_PROTECT_BYTES = 1 * 1024 ** 3         # 1 GB
 
     def __init__(self, drive_number: int, capacity_bytes: int,
                  include_write: bool = False,
                  interface_type: str = "",
-                 profile: str = "quick"):
+                 profile: str = "quick",
+                 include_slc: bool | None = None):
         self.drive_number = drive_number
         self.capacity_bytes = capacity_bytes
         self.include_write = include_write
         self.profile = profile
+        # SLC test — отдельный флаг, чтобы Standard мог не запускать его.
+        # Если параметр не задан явно — определяем по профилю:
+        #   quick    → False (write вообще не идёт)
+        #   standard → False (быстрая запись без SLC)
+        #   full     → True  (SLC @ 50 GB)
+        #   stress   → True  (SLC @ 100 GB)
+        if include_slc is None:
+            self.include_slc = profile in ("full", "stress")
+        else:
+            self.include_slc = include_slc
         # Stress profile: увеличиваем объёмы
         if profile == "stress":
             self.VERIFY_TOTAL = 1024 * 1024 * 1024  # 1 GB
@@ -126,7 +143,22 @@ class BenchmarkEngine:
 
         # Фаза 4-8: Write тесты (деструктивные)
         if self.include_write and not self._cancelled:
-            vol_handles = lock_and_dismount_volumes(self.drive_number)
+            lock_result = lock_and_dismount_volumes(self.drive_number)
+            vol_handles = lock_result.handles
+            # Fail-closed: если хоть один том не залочился — отказываемся писать.
+            # Это критичная безопасность: незалоченный том = живая ФС,
+            # destructive write на PhysicalDriveN мимо неё = коррупция.
+            if lock_result.failed_volumes:
+                err = (f"Aborting write tests: failed to lock "
+                       f"{len(lock_result.failed_volumes)} volume(s): "
+                       f"{', '.join(lock_result.failed_volumes)}")
+                logger.error(err)
+                result.io_errors.append(err)
+                if progress:
+                    progress("write_safety", 1.0, "Volume lock failed — write aborted")
+                unlock_volumes(vol_handles)
+                return result
+
             try:
                 write_phases = [
                     ("seq_write", self._run_sequential_write),
@@ -135,6 +167,9 @@ class BenchmarkEngine:
                     ("verify", self._run_verify),
                     ("slc_cache", self._run_slc_cache),
                 ]
+                # Пропускаем SLC если профиль это запрещает (раздельный флаг)
+                if not self.include_slc:
+                    write_phases = [p for p in write_phases if p[0] != "slc_cache"]
                 for phase_name, phase_fn in write_phases:
                     if self._cancelled:
                         break
@@ -212,9 +247,10 @@ class BenchmarkEngine:
             progress("random", 0.0, "Starting random 4K read...")
 
         # Генерируем случайные смещения, выровненные по 4 KB
+        # n=5000 даёт надёжные P99.9 (5 выборок), P99.99 всё ещё weak (1 выборка)
         offsets = [
             random.randrange(0, max_offset, self.RANDOM_BLOCK)
-            for _ in range(self.RANDOM_COUNT)
+            for _ in range(self.RANDOM_READ_COUNT)
         ]
 
         latencies: list[float] = []
@@ -238,9 +274,9 @@ class BenchmarkEngine:
                     offset_gb = offset / (1024 ** 3)
                     latency_points.append((offset_gb, latency_us))
 
-                    if progress and (i % 50 == 0 or i == self.RANDOM_COUNT - 1):
+                    if progress and (i % 100 == 0 or i == self.RANDOM_READ_COUNT - 1):
                         avg = sum(latencies) / len(latencies)
-                        progress("random", (i + 1) / self.RANDOM_COUNT,
+                        progress("random", (i + 1) / self.RANDOM_READ_COUNT,
                                  f"{len(latencies)} reads, avg {avg:.0f} μs")
 
                 wall_elapsed = time.perf_counter() - wall_start
@@ -252,13 +288,15 @@ class BenchmarkEngine:
             result.random_max_latency_us = max(latencies)
             result.random_reads_count = len(latencies)
             result.latency_points = latency_points
-            # Percentiles
+            # Percentiles. Помечаем P99.9/P99.99 как ненадёжные при n<10000:
+            # для P99.99 нужна 1 выборка на 10k, иначе это просто max().
             sorted_lat = sorted(latencies)
             n = len(sorted_lat)
             result.random_p95_latency_us = sorted_lat[int(n * 0.95)]
             result.random_p99_latency_us = sorted_lat[min(int(n * 0.99), n - 1)]
             result.random_p999_latency_us = sorted_lat[min(int(n * 0.999), n - 1)]
             result.random_p9999_latency_us = sorted_lat[min(int(n * 0.9999), n - 1)]
+            result.random_low_sample = n < 10000  # signal: P99.9/P99.99 unreliable
 
         logger.info(
             f"Random 4K: {result.random_iops:,.0f} IOPS, "
@@ -352,22 +390,25 @@ class BenchmarkEngine:
 
         offsets = [
             random.randrange(0, max_offset, self.RANDOM_BLOCK)
-            for _ in range(self.RANDOM_COUNT)
+            for _ in range(self.RANDOM_WRITE_COUNT)
         ]
 
-        # Случайные данные
-        rand_data = os.urandom(self.RANDOM_BLOCK)
         latencies: list[float] = []
 
         with DeviceHandle(self.drive_number, read_only=False,
                           flags=FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH) as h:
             with AlignedBuffer(self.RANDOM_BLOCK) as buf:
-                ctypes.memmove(buf.ptr, rand_data, self.RANDOM_BLOCK)
                 wall_start = time.perf_counter()
 
                 for i, offset in enumerate(offsets):
                     if self._cancelled:
                         break
+
+                    # Новые случайные данные на каждой итерации — иначе контроллеры
+                    # с компрессией/дедупликацией (SandForce) видят повторяемость
+                    # и нарисуют завышенные IOPS.
+                    rand_data = os.urandom(self.RANDOM_BLOCK)
+                    ctypes.memmove(buf.ptr, rand_data, self.RANDOM_BLOCK)
 
                     t0 = time.perf_counter()
                     h.write_at(offset, buf.ptr, self.RANDOM_BLOCK)
@@ -375,9 +416,11 @@ class BenchmarkEngine:
 
                     latencies.append((t1 - t0) * 1_000_000)
 
-                    if progress and (i % 50 == 0 or i == self.RANDOM_COUNT - 1):
+                    self._poll_temp(result)
+
+                    if progress and (i % 50 == 0 or i == self.RANDOM_WRITE_COUNT - 1):
                         avg = sum(latencies) / len(latencies)
-                        progress("rnd_write", (i + 1) / self.RANDOM_COUNT,
+                        progress("rnd_write", (i + 1) / self.RANDOM_WRITE_COUNT,
                                  f"{len(latencies)} writes, avg {avg:.0f} μs")
 
                 wall_elapsed = time.perf_counter() - wall_start
@@ -405,7 +448,6 @@ class BenchmarkEngine:
             return
 
         duration_sec = 30
-        rand_data = os.urandom(self.RANDOM_BLOCK)
 
         if progress:
             progress("mixed", 0.0, "Mixed I/O 70/30...")
@@ -416,7 +458,6 @@ class BenchmarkEngine:
         with DeviceHandle(self.drive_number, read_only=False,
                           flags=FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH) as h:
             with AlignedBuffer(self.RANDOM_BLOCK) as buf:
-                ctypes.memmove(buf.ptr, rand_data, self.RANDOM_BLOCK)
                 start = time.perf_counter()
 
                 while not self._cancelled:
@@ -431,11 +472,14 @@ class BenchmarkEngine:
                         h.read_at(offset, buf.ptr, self.RANDOM_BLOCK)
                         reads += 1
                     else:
-                        # Write (30%)
+                        # Write (30%) — новые случайные данные каждый раз
+                        rand_data = os.urandom(self.RANDOM_BLOCK)
+                        ctypes.memmove(buf.ptr, rand_data, self.RANDOM_BLOCK)
                         h.write_at(offset, buf.ptr, self.RANDOM_BLOCK)
                         writes += 1
 
                     total_ops = reads + writes
+                    self._poll_temp(result)
                     if progress and total_ops % 200 == 0:
                         progress("mixed", elapsed / duration_sec,
                                  f"R:{reads} W:{writes}")
@@ -489,6 +533,7 @@ class BenchmarkEngine:
                     h.write(buf.ptr, self.VERIFY_BLOCK)
                     hashes.append(hashlib.md5(data).digest())
 
+                    self._poll_temp(result)
                     if progress and i % 10 == 0:
                         progress("verify", (i + 1) / blocks * 0.5,
                                  f"Writing {i+1}/{blocks}...")
@@ -541,21 +586,35 @@ class BenchmarkEngine:
 
     def _run_sequential_write(self, result: BenchmarkResult,
                               progress: Optional[ProgressCallback]):
-        """Последовательная запись 1 MB блоками (случайные данные)."""
+        """Последовательная запись 1 MB блоками (случайные данные).
+
+        ВАЖНО: пропускаем первый GB (MBR_PROTECT_BYTES), чтобы не затереть
+        MBR/GPT/EFI boot — даже если volume lock прошёл, raw write в эту зону
+        может оставить диск без загрузки после теста.
+        """
         total = min(self.SEQUENTIAL_TOTAL, self.capacity_bytes)
         blocks = total // self.SEQUENTIAL_BLOCK
         if blocks <= 0:
             return
 
+        # Стартовый offset: пропускаем MBR/GPT/EFI/boot
+        start_offset = min(self.MBR_PROTECT_BYTES, self.capacity_bytes - total)
+        if start_offset < 0:
+            start_offset = 0
+        # Выравниваем по SEQUENTIAL_BLOCK
+        start_offset = (start_offset // self.SEQUENTIAL_BLOCK) * self.SEQUENTIAL_BLOCK
+
         if progress:
-            progress("seq_write", 0.0, "Starting sequential write...")
+            progress("seq_write", 0.0,
+                     f"Starting sequential write (skipping first "
+                     f"{start_offset // (1024**3)} GB to protect MBR/GPT)...")
 
         with DeviceHandle(self.drive_number, read_only=False,
                           flags=FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH) as h:
             with AlignedBuffer(self.SEQUENTIAL_BLOCK) as buf:
-                # Заполняем буфер случайными данными (не нулями — контроллер может сжимать)
-                rand_data = os.urandom(self.SEQUENTIAL_BLOCK)
-                ctypes.memmove(buf.ptr, rand_data, self.SEQUENTIAL_BLOCK)
+                # Seek на безопасное смещение (не в MBR/GPT)
+                if start_offset > 0:
+                    h.seek(start_offset)
 
                 bytes_written = 0
                 start = time.perf_counter()
@@ -564,15 +623,26 @@ class BenchmarkEngine:
                     if self._cancelled:
                         break
 
+                    # Новые случайные данные на каждой итерации (не нулями —
+                    # контроллер может сжимать; не повторяемый блок —
+                    # SandForce/дедуп контроллеры могут сжимать одинаковые)
+                    rand_data = os.urandom(self.SEQUENTIAL_BLOCK)
+                    ctypes.memmove(buf.ptr, rand_data, self.SEQUENTIAL_BLOCK)
                     h.write(buf.ptr, self.SEQUENTIAL_BLOCK)
                     bytes_written += self.SEQUENTIAL_BLOCK
 
+                    self._poll_temp(result)
                     if progress and (i % 10 == 0 or i == blocks - 1):
                         elapsed = time.perf_counter() - start
                         speed = bytes_written / (1024 * 1024) / elapsed if elapsed > 0 else 0
                         progress("seq_write", (i + 1) / blocks, f"{speed:.1f} MB/s")
 
                 elapsed = time.perf_counter() - start
+
+        logger.info(
+            f"Sequential write started at offset {start_offset} "
+            f"({start_offset // (1024**3)} GB) — MBR/GPT zone protected"
+        )
 
         result.seq_write_bytes = bytes_written
         result.seq_write_time_sec = elapsed
@@ -595,16 +665,21 @@ class BenchmarkEngine:
 
         Пишем до SLC_MAX_GB или пока скорость не упадёт и стабилизируется.
         Записываем точки (written_gb, speed_mbps) для графика.
+        Пропускаем MBR_PROTECT_BYTES в начале — иначе затрём MBR/GPT/boot.
         """
-        max_bytes = min(self.SLC_MAX_GB * 1024 ** 3, self.capacity_bytes)
+        # Стартуем за зоной MBR/GPT
+        start_offset = (self.MBR_PROTECT_BYTES // self.SEQUENTIAL_BLOCK) * self.SEQUENTIAL_BLOCK
+        max_bytes = min(self.SLC_MAX_GB * 1024 ** 3,
+                        max(0, self.capacity_bytes - start_offset))
         sample_bytes = self.SLC_SAMPLE_MB * 1024 * 1024
         sample_blocks = sample_bytes // self.SEQUENTIAL_BLOCK
 
-        if sample_blocks <= 0:
+        if sample_blocks <= 0 or max_bytes <= 0:
             return
 
         if progress:
-            progress("slc_cache", 0.0, "SLC Cache test starting...")
+            progress("slc_cache", 0.0,
+                     f"SLC Cache test starting (offset {start_offset // (1024**3)} GB)...")
 
         points: list[tuple[float, float]] = []  # (written_gb, speed_mbps)
         total_written = 0
@@ -612,9 +687,9 @@ class BenchmarkEngine:
         with DeviceHandle(self.drive_number, read_only=False,
                           flags=FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH) as h:
             with AlignedBuffer(self.SEQUENTIAL_BLOCK) as buf:
-                # Случайные данные
-                rand_data = os.urandom(self.SEQUENTIAL_BLOCK)
-                ctypes.memmove(buf.ptr, rand_data, self.SEQUENTIAL_BLOCK)
+                # Стартуем за MBR/GPT/EFI
+                if start_offset > 0:
+                    h.seek(start_offset)
 
                 while total_written < max_bytes and not self._cancelled:
                     # Пишем sample_bytes и замеряем скорость
@@ -625,6 +700,11 @@ class BenchmarkEngine:
                         if self._cancelled:
                             break
                         try:
+                            # Новые случайные данные каждый блок (без них
+                            # SandForce и подобные занижают реальную нагрузку
+                            # на NAND через компрессию повторяющегося паттерна)
+                            rand_data = os.urandom(self.SEQUENTIAL_BLOCK)
+                            ctypes.memmove(buf.ptr, rand_data, self.SEQUENTIAL_BLOCK)
                             h.write(buf.ptr, self.SEQUENTIAL_BLOCK)
                             sample_written += self.SEQUENTIAL_BLOCK
                         except DiskAccessError:
@@ -640,18 +720,22 @@ class BenchmarkEngine:
                         speed = sample_written / (1024 * 1024) / elapsed
                         points.append((written_gb, speed))
 
+                    # Temp polling — SLC тест греет сильнее всего, тут особенно
+                    # важно увидеть thermal throttle (легко спутать с cliff'ом)
+                    self._poll_temp(result)
+
                     if progress:
                         pct = total_written / max_bytes
                         spd = points[-1][1] if points else 0
                         progress("slc_cache", pct,
                                  f"{written_gb:.1f} GB written, {spd:.0f} MB/s")
 
-                    # Детектируем cliff: если скорость упала > 40% от первых 3 точек
-                    # и стабилизировалась — пишем ещё 3 GB и останавливаемся
+                    # Детектируем cliff: если current < initial * SLC_CLIFF_RATIO
+                    # и стабилизировалось — пишем ещё 3 GB и останавливаемся
                     if len(points) >= 5:
                         initial_speed = sum(p[1] for p in points[:3]) / 3
                         current_speed = sum(p[1] for p in points[-3:]) / 3
-                        if current_speed < initial_speed * 0.6:
+                        if current_speed < initial_speed * self.SLC_CLIFF_RATIO:
                             # Скорость упала — пишем ещё 3 GB для стабилизации
                             post_cliff_bytes = 3 * 1024 ** 3
                             target = total_written + post_cliff_bytes
@@ -662,6 +746,8 @@ class BenchmarkEngine:
                                     if self._cancelled:
                                         break
                                     try:
+                                        rand_data = os.urandom(self.SEQUENTIAL_BLOCK)
+                                        ctypes.memmove(buf.ptr, rand_data, self.SEQUENTIAL_BLOCK)
                                         h.write(buf.ptr, self.SEQUENTIAL_BLOCK)
                                         sw += self.SEQUENTIAL_BLOCK
                                     except DiskAccessError:
@@ -672,6 +758,7 @@ class BenchmarkEngine:
                                 if el > 0 and sw > 0:
                                     s = sw / (1024 * 1024) / el
                                     points.append((total_written / (1024 ** 3), s))
+                                self._poll_temp(result)
                                 if progress:
                                     progress("slc_cache", min(1.0, total_written / max_bytes),
                                              f"{total_written / (1024**3):.1f} GB, {s:.0f} MB/s (post-cache)")
@@ -684,11 +771,11 @@ class BenchmarkEngine:
             initial_speed = sum(p[1] for p in points[:3]) / 3
             result.slc_speed_mbps = initial_speed
 
-            # Ищем точку перегиба (первое падение > 40%)
+            # Ищем точку перегиба (первое падение ниже SLC_CLIFF_RATIO)
             cliff_gb = 0.0
             post_speeds = []
             for i, (gb, spd) in enumerate(points):
-                if spd < initial_speed * 0.6 and i >= 3:
+                if spd < initial_speed * self.SLC_CLIFF_RATIO and i >= 3:
                     if cliff_gb == 0:
                         cliff_gb = gb
                     post_speeds.append(spd)

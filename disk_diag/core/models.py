@@ -95,7 +95,12 @@ class HealthStatus:
     critical_issues: list[str] = field(default_factory=list)
     health_score: int = -1          # 0-100, -1 = не рассчитан
     tbw_consumed_tb: float = -1     # -1 = не известно
-    tbw_rated_tb: float = -1        # -1 = не известно
+    # ОЦЕНКА номинальной TBW по эвристике 600 TBW/TB (consumer TLC).
+    # Это НЕ заявленная производителем спека — название отражает суть:
+    # без vendor lookup мы не знаем настоящий rated TBW (QLC ~150,
+    # consumer TLC ~600, enterprise 3D NAND ~3000+ TBW/TB).
+    tbw_estimated_tb: float = -1    # -1 = не известно
+    tbw_estimation_method: str = ""  # "heuristic_600_per_tb" или "vendor_spec" etc.
     tbw_remaining_days: int = -1    # прогноз, -1 = не известно
     daily_write_tb: float = -1      # среднесуточная запись
     waf: float = -1                 # Write Amplification Factor, -1 = нет данных
@@ -126,6 +131,7 @@ class BenchmarkResult:
     random_p999_latency_us: float = 0.0
     random_p9999_latency_us: float = 0.0
     random_reads_count: int = 0
+    random_low_sample: bool = False  # True если n<10000 — P99.9/P99.99 weak
 
     # Random 4K write
     random_write_iops: float = 0.0

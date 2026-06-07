@@ -93,9 +93,9 @@ class HealthIndicator(QFrame):
             extra_lines.append(f"{tr('Uptime', 'Наработка')}: {' '.join(parts)} ({h:,} {tr('hrs', 'ч')})")
         # TBW и прогноз — только если диск не при смерти (score >= 30)
         if status.health_score >= 30:
-            if status.tbw_consumed_tb > 0 and status.tbw_rated_tb > 0:
-                pct = status.tbw_consumed_tb / status.tbw_rated_tb * 100
-                extra_lines.append(f"TBW: {status.tbw_consumed_tb:.1f} / ~{status.tbw_rated_tb:.0f} TB ({pct:.1f}%)")
+            if status.tbw_consumed_tb > 0 and status.tbw_estimated_tb > 0:
+                pct = status.tbw_consumed_tb / status.tbw_estimated_tb * 100
+                extra_lines.append(f"TBW: {status.tbw_consumed_tb:.1f} / ~{status.tbw_estimated_tb:.0f} TB ({pct:.1f}%)")
             if status.tbw_remaining_days > 0:
                 years = status.tbw_remaining_days / 365
                 lbl = tr("Forecast", "Прогноз")

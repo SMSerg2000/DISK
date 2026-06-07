@@ -533,7 +533,8 @@ class MainWindow(QMainWindow):
                 "warnings": s.warnings,
                 "critical_issues": s.critical_issues,
                 "tbw_consumed_tb": s.tbw_consumed_tb,
-                "tbw_rated_tb": s.tbw_rated_tb,
+                "tbw_estimated_tb": s.tbw_estimated_tb,
+                "tbw_estimation_method": s.tbw_estimation_method,
                 "tbw_remaining_days": s.tbw_remaining_days,
                 "daily_write_tb": s.daily_write_tb,
                 "power_on_hours": s.power_on_hours,
@@ -651,8 +652,8 @@ class MainWindow(QMainWindow):
                     lines.append(f"  −{pts} {pts_lbl}: {reason}")
             if s.tbw_consumed_tb > 0:
                 lines.append(f"TBW {tr('used', 'использовано')}:   {s.tbw_consumed_tb:.1f} TB")
-            if s.tbw_rated_tb > 0:
-                lines.append(f"TBW {tr('rated', 'номинал')}:  ~{s.tbw_rated_tb:.0f} TB ({tr('estimate', 'оценка')})")
+            if s.tbw_estimated_tb > 0:
+                lines.append(f"TBW {tr('estimated', 'оценка')}:  ~{s.tbw_estimated_tb:.0f} TB ({tr('heuristic 600 TBW/TB', 'эвристика 600 TBW/TB')})")
             if s.tbw_remaining_days > 0:
                 years = s.tbw_remaining_days / 365
                 lbl = tr("Forecast", "Прогноз")
