@@ -76,12 +76,14 @@ def _parse_raw_health(health_data: bytes) -> NvmeHealthInfo:
     warning_temp_time = struct.unpack_from("<I", health_data, offset)[0]; offset += 4
     critical_temp_time = struct.unpack_from("<I", health_data, offset)[0]; offset += 4
 
-    # Temperature sensors (8 x uint16, в Кельвинах)
+    # Temperature sensors (8 x uint16, в Кельвинах).
+    # Range-check как у основной температуры: незаполненные/мусорные
+    # сенсоры (0 K, 0xFFFF) не должны давать −273°C в таблице.
     temperature_sensors = []
     for i in range(8):
         if offset + 2 <= len(health_data):
             sensor_k = struct.unpack_from("<H", health_data, offset)[0]
-            if sensor_k > 0:
+            if 200 <= sensor_k <= 400:
                 temperature_sensors.append(sensor_k - 273)
             offset += 2
 
@@ -422,8 +424,25 @@ def _try_scsi_miniport_nvme(drive_number: int) -> NvmeHealthInfo:
 # Method 4: PowerShell / WMI fallback
 # ============================================================
 
+def _wmi_int(value) -> int:
+    """Безопасная конвертация WMI-значения в int.
+
+    PowerShell может вернуть число, строку ("50.5"), null — не падаем
+    с ValueError, а возвращаем 0 (поле «неизвестно»).
+    """
+    if value is None:
+        return 0
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return 0
+
+
 def _read_nvme_health_wmi(drive_number: int) -> NvmeHealthInfo:
     """Fallback: чтение NVMe health через PowerShell Get-StorageReliabilityCounter."""
+    # Гигиена: drive_number попадает в PowerShell-скрипт — гарантируем int
+    # (все реальные источники и так int: argparse type=int, enumeration)
+    drive_number = int(drive_number)
     ps_script = (
         f"$d = Get-PhysicalDisk | Where-Object DeviceId -eq '{drive_number}';"
         f"if (-not $d) {{ Write-Error 'Disk not found'; exit 1 }};"
@@ -453,26 +472,32 @@ def _read_nvme_health_wmi(drive_number: int) -> NvmeHealthInfo:
     except (json.JSONDecodeError, ValueError) as e:
         raise DiskAccessError(f"PowerShell JSON parse error: {e}")
 
+    # ConvertTo-Json может вернуть не-объект (массив, скаляр) — у них нет .get()
+    if not isinstance(data, dict):
+        raise DiskAccessError(
+            f"PowerShell returned {type(data).__name__}, expected object"
+        )
+
     logger.info(f"NVMe health via PowerShell/WMI: {data}")
 
     return NvmeHealthInfo(
         critical_warning=0,
-        temperature_celsius=int(data.get("Temperature") or 0),
+        temperature_celsius=_wmi_int(data.get("Temperature")),
         available_spare=0,
         available_spare_threshold=0,
-        percentage_used=int(data.get("Wear") or 0),
+        percentage_used=_wmi_int(data.get("Wear")),
         data_units_read=0,
         data_units_written=0,
         host_read_commands=0,
         host_write_commands=0,
         controller_busy_time=0,
-        power_cycles=int(data.get("StartStopCycleCount") or 0),
-        power_on_hours=int(data.get("PowerOnHours") or 0),
+        power_cycles=_wmi_int(data.get("StartStopCycleCount")),
+        power_on_hours=_wmi_int(data.get("PowerOnHours")),
         unsafe_shutdowns=0,
-        media_errors=int(data.get("ReadErrorsUncorrected") or 0),
+        media_errors=_wmi_int(data.get("ReadErrorsUncorrected")),
         error_log_entries=(
-            int(data.get("ReadErrorsTotal") or 0)
-            + int(data.get("WriteErrorsTotal") or 0)
+            _wmi_int(data.get("ReadErrorsTotal"))
+            + _wmi_int(data.get("WriteErrorsTotal"))
         ),
         warning_temp_time=0,
         critical_temp_time=0,

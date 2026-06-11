@@ -8,6 +8,11 @@ from ..data.vendor_profiles import match_profile, decode_raw
 from ..i18n import tr
 
 
+# Cap прогноза жизни: ~110 лет. Больше — бессмысленные миллионы дней
+# при почти нулевой скорости записи (GUI показывает "> 100 лет")
+_REMAINING_DAYS_CAP = 40000
+
+
 def _get_attr_raw(attributes: list[SmartAttribute], attr_id: int) -> int:
     """Получить raw_value атрибута по ID, или -1 если не найден."""
     for a in attributes:
@@ -159,12 +164,16 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0, profile=
     # Прогноз жизни (decoded POH через vendor profile)
     poh_raw = _get_attr_raw(attributes, 9)
     power_on_hours = decode_raw(profile, 9, poh_raw) if poh_raw > 0 else -1
-    if consumed_tb > 0 and power_on_hours is not None and power_on_hours > 24:
+    if consumed_tb > 0 and power_on_hours > 24:
         power_on_days = power_on_hours / 24.0
         daily_write_tb = consumed_tb / power_on_days
         if daily_write_tb > 0 and rated_tb > 0:
             remaining_tb = max(0, rated_tb - consumed_tb)
-            remaining_days = int(remaining_tb / daily_write_tb)
+            # Cap: при почти нулевой скорости записи прогноз уходил в
+            # миллионы дней — бессмысленно и засоряет JSON. 40000 дней
+            # (~110 лет) гарантированно триггерит "> 100 лет" в GUI.
+            remaining_days = min(int(remaining_tb / daily_write_tb),
+                                 _REMAINING_DAYS_CAP)
 
     # WAF = NAND Writes / Host Writes
     waf = -1.0
@@ -380,7 +389,8 @@ def _nvme_tbw_and_waf(info: NvmeHealthInfo, capacity_bytes: int = 0):
         daily_write_tb = consumed_tb / power_on_days
         if daily_write_tb > 0 and rated_tb > 0:
             remaining_tb = max(0, rated_tb - consumed_tb)
-            remaining_days = int(remaining_tb / daily_write_tb)
+            remaining_days = min(int(remaining_tb / daily_write_tb),
+                                 _REMAINING_DAYS_CAP)
 
     # WAF — нужны данные о NAND writes (NVMe стандарт не включает их,
     # но percentage_used даёт косвенную оценку)

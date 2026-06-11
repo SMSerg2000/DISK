@@ -535,6 +535,10 @@ class SurfaceScanPanel(QWidget):
         self._status.setStyleSheet("color: #a6adc8;")
         self._clear_results()
 
+    def is_running(self) -> bool:
+        """Идёт ли сейчас сканирование (для подтверждения при закрытии окна)."""
+        return bool(self._thread and self._thread.isRunning())
+
     def stop(self):
         """Остановить текущее сканирование."""
         self._refresh_timer.stop()
@@ -542,7 +546,10 @@ class SurfaceScanPanel(QWidget):
             self._worker.cancel()
         if self._thread and self._thread.isRunning():
             self._thread.quit()
-            self._thread.wait(3000)
+            if not self._thread.wait(3000):
+                # Write-режим мог не успеть прерваться — даём cancel'у дожать
+                logger.warning("Surface scan thread still running, waiting up to 15s...")
+                self._thread.wait(15000)
         self._worker = None
         self._thread = None
         self._btn_start.setEnabled(self._drive_number is not None)
@@ -705,6 +712,19 @@ class SurfaceScanPanel(QWidget):
         start_bytes = start_lba * 512
         end_bytes = end_lba * 512 if end_lba > 0 else 0
 
+        # Отключаем и утилизируем предыдущие worker/thread: их соединения
+        # не должны доставлять устаревшие сигналы в новый прогон
+        if self._worker is not None:
+            try:
+                self._worker.disconnect()
+            except RuntimeError:
+                pass  # соединений уже нет
+            self._worker.deleteLater()
+            self._worker = None
+        if self._thread is not None:
+            self._thread.deleteLater()
+            self._thread = None
+
         # Валидация диапазона до создания worker'а
         try:
             self._worker = _SurfaceScanWorker(
@@ -756,11 +776,16 @@ class SurfaceScanPanel(QWidget):
 
     def _on_block_scanned(self, block_index: int, category_value: int, latency_ms: float):
         """Обновление данных карты (вызывается из worker thread через signal)."""
+        # Guard: queued-сигнал мог прийти после stop() — состояние уже сброшено
+        if self._worker is None:
+            return
         self._block_map.set_block(block_index, category_value)
         self._counts[category_value] = self._counts.get(category_value, 0) + 1
 
     def _on_bad_sector(self, lba: int):
         """Битый сектор найден — добавляем в список (реалтайм)."""
+        if self._worker is None:
+            return
         self._bad_lbas.append(lba)
 
     def _on_refresh_tick(self):
@@ -789,6 +814,9 @@ class SurfaceScanPanel(QWidget):
     def _on_finished(self, result: SurfaceScanResult):
         self._refresh_timer.stop()
         self._block_map.flush()
+        # Прогон завершён: guard'ы _on_block_scanned/_on_bad_sector должны
+        # отсекать любые сигналы, прилетевшие после finished
+        self._worker = None
 
         self._progress.setValue(1000)
         self._btn_start.setEnabled(True)
@@ -833,6 +861,7 @@ class SurfaceScanPanel(QWidget):
 
     def _on_error(self, error_msg: str):
         self._refresh_timer.stop()
+        self._worker = None
         self._btn_start.setEnabled(self._drive_number is not None)
         self._btn_stop.setEnabled(False)
         self._block_combo.setEnabled(True)

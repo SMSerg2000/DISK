@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self._drives: list[DriveInfo] = []
         self._worker_thread: QThread | None = None
         self._worker: _SmartWorker | None = None
+        self._smart_gen: int = 0  # generation против гонки stale-результатов
         # Для экспорта SMART
         self._smart_data_type: str = "none"   # "ata", "nvme", "none"
         self._smart_ata_attrs: list = []
@@ -296,21 +297,39 @@ class MainWindow(QMainWindow):
         if self._worker_thread is not None and self._worker_thread.isRunning():
             self._worker_thread.quit()
             self._worker_thread.wait(2000)
+        # Явная утилизация прежних Qt-объектов (иначе копятся до закрытия окна)
+        if self._worker is not None:
+            self._worker.deleteLater()
+        if self._worker_thread is not None:
+            self._worker_thread.deleteLater()
+
+        # Generation-счётчик против гонки: сигнал finished от СТАРОГО worker'а
+        # может прийти после переключения на другой диск — без сверки SMART
+        # одного диска отрисовался бы под именем другого (тихий ложный диагноз).
+        self._smart_gen += 1
+        gen = self._smart_gen
 
         self._worker = _SmartWorker(drive)
         self._worker_thread = QThread()
         self._worker.moveToThread(self._worker_thread)
 
         self._worker_thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._on_smart_finished)
-        self._worker.error.connect(self._on_smart_error)
+        self._worker.finished.connect(
+            lambda result, g=gen: self._on_smart_finished(result, g))
+        self._worker.error.connect(
+            lambda msg, g=gen: self._on_smart_error(msg, g))
         self._worker.finished.connect(self._worker_thread.quit)
         self._worker.error.connect(self._worker_thread.quit)
 
         self._worker_thread.start()
 
-    def _on_smart_finished(self, result: tuple):
+    def _on_smart_finished(self, result: tuple, gen: int = -1):
         """Обработчик завершения чтения SMART."""
+        # Устаревший результат от предыдущего worker'а — игнорируем
+        if gen != -1 and gen != self._smart_gen:
+            logger.debug(f"Stale SMART result ignored (gen {gen} != {self._smart_gen})")
+            return
+
         data_type = result[0]
 
         if data_type == "ata":
@@ -393,8 +412,13 @@ class MainWindow(QMainWindow):
                 '<span style="color: #585b70;">Выберите атрибут для просмотра описания</span>'
             )
 
-    def _on_smart_error(self, error_msg: str):
+    def _on_smart_error(self, error_msg: str, gen: int = -1):
         """Обработчик ошибки чтения SMART."""
+        # Устаревшая ошибка от предыдущего worker'а — игнорируем
+        if gen != -1 and gen != self._smart_gen:
+            logger.debug(f"Stale SMART error ignored (gen {gen} != {self._smart_gen})")
+            return
+
         # Более понятное сообщение для частых ошибок
         if "1117" in error_msg:
             display_msg = (
@@ -753,7 +777,27 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        """Корректное завершение при закрытии окна."""
+        """Корректное завершение при закрытии окна.
+
+        Если идёт benchmark/surface-тест (возможно, с записью на диск) —
+        спрашиваем подтверждение: тихо бросать поток с raw write нельзя.
+        """
+        if self._benchmark_panel.is_running() or self._surface_panel.is_running():
+            reply = QMessageBox.question(
+                self,
+                tr("Test in progress", "Тест выполняется"),
+                tr("A disk test is still running.\n"
+                   "Interrupt the test and exit?",
+                   "Тест диска ещё выполняется.\n"
+                   "Прервать тест и выйти?"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+
+        # stop() панелей шлёт cancel() и ждёт до 3+15 секунд завершения потока
         self._benchmark_panel.stop()
         self._surface_panel.stop()
         if self._worker_thread is not None and self._worker_thread.isRunning():

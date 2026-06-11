@@ -149,7 +149,7 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
     176: _a(176, "Erase Fail Count Chip",         "Ошибки стир. (чип)",
                "Chip-level erase fail count (SSD)",
                "Ошибки стирания на уровне чипа (SSD)", True),
-    177: _a(177, "Wear Leveling Count",           "Выравнивание износа",
+    177: _a(177, "Wear Leveling Cycle Count",     "Выравнивание износа",
                "Wear leveling cycle count (SSD)",
                "Счётчик выравнивания износа flash (SSD)", False),
     178: _a(178, "Used Reserved Block Count Total", "Использ. резервные блоки",

@@ -251,6 +251,23 @@ def cmd_benchmark(drive_number: int, include_write: bool,
                 return 3
             print("Confirmed. Starting benchmark.\n")
 
+        # TOCTOU-защита: между подтверждением и стартом юзер мог переткнуть
+        # USB — номера дисков сдвигаются, и write ушёл бы на ДРУГОЙ диск.
+        # Перечитываем список и сверяем серийник под тем же номером.
+        recheck = None
+        for d in enumerate_drives():
+            if d.drive_number == drive_number:
+                recheck = d
+                break
+        if recheck is None:
+            print(f"Disk {drive_number} disappeared after confirmation. Aborted.")
+            return 4
+        if (recheck.serial_number or "").strip() != (drive.serial_number or "").strip():
+            print(f"Disk {drive_number} CHANGED after confirmation "
+                  f"(was '{drive.serial_number}', now '{recheck.serial_number}'). "
+                  f"Drive numbers shifted — Aborted.")
+            return 4
+
     def progress(phase, pct, msg):
         print(f"\r  [{phase}] {pct*100:.0f}% {msg}          ", end="", flush=True)
 

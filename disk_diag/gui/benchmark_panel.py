@@ -547,13 +547,21 @@ class BenchmarkPanel(QWidget):
         self._status.setStyleSheet("color: #a6adc8;")
         self._clear_results()
 
+    def is_running(self) -> bool:
+        """Идёт ли сейчас бенчмарк (для подтверждения при закрытии окна)."""
+        return bool(self._thread and self._thread.isRunning())
+
     def stop(self):
         """Остановить текущий бенчмарк (если запущен)."""
         if self._worker:
             self._worker.cancel()
         if self._thread and self._thread.isRunning():
             self._thread.quit()
-            self._thread.wait(3000)
+            if not self._thread.wait(3000):
+                # Write-тест мог не успеть прерваться — даём cancel'у дожать
+                # (выход кооперативный: следующая итерация цикла записи)
+                logger.warning("Benchmark thread still running, waiting up to 15s...")
+                self._thread.wait(15000)
         self._worker = None
         self._thread = None
         self._btn_start.setEnabled(self._drive_number is not None)
@@ -660,6 +668,19 @@ class BenchmarkPanel(QWidget):
         self._status.setText(tr("Running...", "Выполняется..."))
         self._status.setStyleSheet("color: #cdd6f4;")
 
+        # Отключаем и утилизируем предыдущие worker/thread: их соединения
+        # не должны доставлять устаревшие сигналы в новый прогон
+        if self._worker is not None:
+            try:
+                self._worker.disconnect()
+            except RuntimeError:
+                pass  # соединений уже нет
+            self._worker.deleteLater()
+            self._worker = None
+        if self._thread is not None:
+            self._thread.deleteLater()
+            self._thread = None
+
         self._worker = _BenchmarkWorker(self._drive_number, self._capacity_bytes,
                                         include_write, self._interface_type, profile)
         self._thread = QThread()
@@ -704,6 +725,8 @@ class BenchmarkPanel(QWidget):
 
     def _on_finished(self, result: BenchmarkResult):
         self._last_result = result
+        # Прогон завершён — устаревшие сигналы больше не актуальны
+        self._worker = None
         self._progress.setValue(100)
         self._btn_start.setEnabled(True)
         self._btn_stop.setEnabled(False)
@@ -836,6 +859,7 @@ class BenchmarkPanel(QWidget):
             self._slc_chart.set_points(result.slc_points)
 
     def _on_error(self, error_msg: str):
+        self._worker = None
         self._btn_start.setEnabled(self._drive_number is not None)
         self._btn_stop.setEnabled(False)
         self._profile_combo.setEnabled(True)

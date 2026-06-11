@@ -147,7 +147,7 @@ def match_profile(model: str, firmware: str = "") -> Optional[dict]:
     return None
 
 
-    # Универсальные правила — НЕ зависят от vendor profile
+# Универсальные правила — НЕ зависят от vendor profile
 _DEFAULT_DECODE = {
     190: "low8",   # Airflow Temperature — ВСЕГДА low byte
     194: "low8",   # Temperature — ВСЕГДА low byte
