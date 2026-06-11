@@ -717,8 +717,8 @@ class SurfaceScanPanel(QWidget):
             self._slow_check.setEnabled(True)
             self._from_edit.setEnabled(True)
             self._to_edit.setEnabled(True)
-            self._scan_btn.setEnabled(True)
-            self._stop_btn.setEnabled(False)
+            self._btn_start.setEnabled(True)
+            self._btn_stop.setEnabled(False)
             self._status.setText(tr("Invalid range", "Неверный диапазон"))
             self._status.setStyleSheet("color: #f38ba8;")
             QMessageBox.warning(

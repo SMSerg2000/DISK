@@ -10,3 +10,8 @@ build/
 *.png
 .venv/
 .env
+
+# Локальные данные тестов — не для репозитория
+disk_history.db
+SMART_*.txt
+lang.cfg

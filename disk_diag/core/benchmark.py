@@ -380,16 +380,23 @@ class BenchmarkEngine:
 
     def _run_random_4k_write(self, result: BenchmarkResult,
                              progress: Optional[ProgressCallback]):
-        """Случайная запись 4 KB блоками (QD1)."""
+        """Случайная запись 4 KB блоками (QD1).
+
+        Нижняя граница смещений — MBR_PROTECT_BYTES: случайная 4K запись
+        не должна попадать в MBR/GPT/EFI зону (LBA 0 и первый GB).
+        """
         max_offset = (self.capacity_bytes - self.RANDOM_BLOCK) // self.RANDOM_BLOCK * self.RANDOM_BLOCK
-        if max_offset <= 0:
+        min_offset = self.MBR_PROTECT_BYTES  # 1 GiB, кратен RANDOM_BLOCK
+        if max_offset <= min_offset:
+            logger.warning("Random 4K write skipped: disk too small for "
+                           "MBR-protected writes")
             return
 
         if progress:
             progress("rnd_write", 0.0, "Starting random 4K write...")
 
         offsets = [
-            random.randrange(0, max_offset, self.RANDOM_BLOCK)
+            random.randrange(min_offset, max_offset, self.RANDOM_BLOCK)
             for _ in range(self.RANDOM_WRITE_COUNT)
         ]
 
@@ -442,9 +449,17 @@ class BenchmarkEngine:
 
     def _run_mixed_io(self, result: BenchmarkResult,
                       progress: Optional[ProgressCallback]):
-        """Случайные 4K: 70% чтение + 30% запись (QD1, 30 сек)."""
+        """Случайные 4K: 70% чтение + 30% запись (QD1, 30 сек).
+
+        Смещения от MBR_PROTECT_BYTES: write-ветка не должна попадать
+        в MBR/GPT зону. Единый диапазон для чтения и записи — проще и
+        ничего не теряем (первый GB не репрезентативнее остального диска).
+        """
         max_offset = (self.capacity_bytes - self.RANDOM_BLOCK) // self.RANDOM_BLOCK * self.RANDOM_BLOCK
-        if max_offset <= 0:
+        min_offset = self.MBR_PROTECT_BYTES  # 1 GiB, кратен RANDOM_BLOCK
+        if max_offset <= min_offset:
+            logger.warning("Mixed I/O skipped: disk too small for "
+                           "MBR-protected writes")
             return
 
         duration_sec = 30
@@ -465,7 +480,7 @@ class BenchmarkEngine:
                     if elapsed >= duration_sec:
                         break
 
-                    offset = random.randrange(0, max_offset, self.RANDOM_BLOCK)
+                    offset = random.randrange(min_offset, max_offset, self.RANDOM_BLOCK)
 
                     if random.random() < 0.7:
                         # Read (70%)
@@ -508,13 +523,25 @@ class BenchmarkEngine:
 
     def _run_verify(self, result: BenchmarkResult,
                     progress: Optional[ProgressCallback]):
-        """Запись случайных данных → чтение → сравнение (CRC)."""
+        """Запись случайных данных → чтение → сравнение (CRC).
+
+        Обе фазы работают со смещения MBR_PROTECT_BYTES — verify не должен
+        трогать MBR/GPT/EFI зону (фаза 2 открывает новый handle, поэтому
+        seek обязателен в обеих).
+        """
         import hashlib
 
-        total = min(self.VERIFY_TOTAL, self.capacity_bytes)
+        # Полезная зона: за пределами MBR/GPT (первый 1 GB не трогаем)
+        usable = self.capacity_bytes - self.MBR_PROTECT_BYTES
+        if usable < self.VERIFY_BLOCK:
+            logger.warning("Verify skipped: disk too small for MBR-protected write")
+            return
+        total = min(self.VERIFY_TOTAL, usable)
         blocks = total // self.VERIFY_BLOCK
         if blocks <= 0:
             return
+        # MBR_PROTECT_BYTES (1 GiB) кратен VERIFY_BLOCK (1 MiB)
+        start_offset = self.MBR_PROTECT_BYTES
 
         if progress:
             progress("verify", 0.0, "Write-Read-Verify...")
@@ -524,7 +551,7 @@ class BenchmarkEngine:
         with DeviceHandle(self.drive_number, read_only=False,
                           flags=FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH) as h:
             with AlignedBuffer(self.VERIFY_BLOCK) as buf:
-                start = time.perf_counter()
+                h.seek(start_offset)
                 for i in range(blocks):
                     if self._cancelled:
                         break
@@ -541,12 +568,16 @@ class BenchmarkEngine:
         if self._cancelled:
             return
 
-        # Фаза 2: Чтение и проверка
+        # Фаза 2: Чтение и проверка (с того же смещения!)
         ok = 0
         fail = 0
         with DeviceHandle(self.drive_number, read_only=True,
                           flags=FILE_FLAG_NO_BUFFERING) as h:
             with AlignedBuffer(self.VERIFY_BLOCK) as buf:
+                h.seek(start_offset)
+                # Таймер только фазы чтения: verify_speed = скорость чтения,
+                # а не среднее по двум фазам (которое занижено вдвое)
+                start = time.perf_counter()
                 for i in range(len(hashes)):
                     if self._cancelled:
                         break
@@ -592,17 +623,22 @@ class BenchmarkEngine:
         MBR/GPT/EFI boot — даже если volume lock прошёл, raw write в эту зону
         может оставить диск без загрузки после теста.
         """
-        total = min(self.SEQUENTIAL_TOTAL, self.capacity_bytes)
+        # Полезная зона — ЗА пределами MBR/GPT. На маленьких дисках урезаем
+        # объём теста, но НИКОГДА не сдвигаем старт внутрь защищённой зоны
+        # (прежняя формула min(MBR, capacity-total) на дисках < 1.5 GB
+        # давала start_offset < 1 GB и затирала MBR).
+        usable = self.capacity_bytes - self.MBR_PROTECT_BYTES
+        if usable < self.SEQUENTIAL_BLOCK:
+            logger.warning("Sequential write skipped: disk too small for "
+                           "MBR-protected write")
+            return
+        total = min(self.SEQUENTIAL_TOTAL, usable)
         blocks = total // self.SEQUENTIAL_BLOCK
         if blocks <= 0:
             return
 
-        # Стартовый offset: пропускаем MBR/GPT/EFI/boot
-        start_offset = min(self.MBR_PROTECT_BYTES, self.capacity_bytes - total)
-        if start_offset < 0:
-            start_offset = 0
-        # Выравниваем по SEQUENTIAL_BLOCK
-        start_offset = (start_offset // self.SEQUENTIAL_BLOCK) * self.SEQUENTIAL_BLOCK
+        # Стартовый offset: строго за MBR/GPT/EFI (1 GiB кратен 1 MiB блоку)
+        start_offset = self.MBR_PROTECT_BYTES
 
         if progress:
             progress("seq_write", 0.0,

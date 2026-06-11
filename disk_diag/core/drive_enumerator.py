@@ -71,6 +71,26 @@ def _detect_hypervisor(model: str) -> str:
     return ""
 
 
+def _looks_nvme_model(model: str) -> bool:
+    """Эвристика: похожа ли модель на NVMe SSD (для bus_type=Unknown).
+
+    OEM драйверы (Intel RST/VMD) возвращают нестандартный bus_type, и
+    интерфейс приходится угадывать по модели. Важно НЕ принять за NVMe
+    Samsung SATA: MZ7* (2.5" SATA: 850/860/870 EVO OEM) и MZN* (mSATA /
+    M.2 SATA) — это SATA-диски, у них префиксы пересекаются с NVMe-линейкой
+    MZV* (M.2 NVMe), MZ1* (PM983 и др.), MZQ* (U.2).
+    """
+    m = model.upper().strip()
+    # Samsung SATA — явное исключение, НЕ NVMe
+    if m.startswith(("MZ7", "MZN")):
+        return False
+    if "NVME" in m:
+        return True
+    # HFM* — SK hynix OEM, KBG* — KIOXIA, PM9* — Samsung OEM NVMe,
+    # MZV*/MZ1*/MZQ* — Samsung NVMe (M.2 / PM983 / U.2)
+    return m.startswith(("HFM", "KBG", "PM9", "MZV", "MZ1", "MZQ"))
+
+
 def _looks_generic_usb_model(model: str) -> bool:
     """Проверить, похожа ли модель на обобщённое имя USB-кармана.
 
@@ -251,16 +271,14 @@ def enumerate_drives() -> list[DriveInfo]:
                         f"PhysicalDrive{n}: virtual disk → {hypervisor}"
                     )
 
-                # Эвристика: если bus_type=Unknown, но модель содержит "NVMe"
-                # (некоторые OEM драйверы возвращают нестандартный bus_type для
-                # SK hynix BC511, KBG, HFM* и других NVMe SSD)
-                if interface == InterfaceType.UNKNOWN:
-                    model_upper = model.upper()
-                    if ("NVME" in model_upper or
-                            model_upper.startswith(("HFM", "KBG", "PM9", "MZ"))):
-                        interface = InterfaceType.NVME
-                        logger.info(f"PhysicalDrive{n}: bus_type unknown but "
-                                    f"model looks NVMe → forced NVME")
+                # Эвристика: если bus_type=Unknown, но модель похожа на NVMe
+                # (OEM драйверы Intel RST/VMD возвращают нестандартный bus_type).
+                # Samsung SATA (MZ7*/MZN*) сюда НЕ попадает — для него ниже
+                # сработает SATA-эвристика через SMART_GET_VERSION.
+                if interface == InterfaceType.UNKNOWN and _looks_nvme_model(model):
+                    interface = InterfaceType.NVME
+                    logger.info(f"PhysicalDrive{n}: bus_type unknown but "
+                                f"model looks NVMe → forced NVME")
 
                 # USB-карман с обобщённым именем — попробуем достать
                 # настоящую модель/серийник/прошивку через ATA IDENTIFY DEVICE.
