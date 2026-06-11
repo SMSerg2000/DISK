@@ -26,6 +26,44 @@ from ..data.smart_db import get_attribute_name, is_critical_attribute, SSD_INDIC
 
 logger = logging.getLogger(__name__)
 
+# SCSI status codes (SAM-5) — для расшифровки в сообщениях об ошибках
+_SCSI_STATUS_NAMES = {
+    0x00: "GOOD",
+    0x02: "CHECK CONDITION",
+    0x04: "CONDITION MET",
+    0x08: "BUSY",
+    0x18: "RESERVATION CONFLICT",
+    0x28: "TASK SET FULL",
+    0x30: "ACA ACTIVE",
+    0x40: "TASK ABORTED",
+}
+
+
+def check_scsi_status(result: bytes, sense_offset: int, context: str) -> None:
+    """Проверить ScsiStatus в ответе IOCTL_SCSI_PASS_THROUGH.
+
+    DeviceIoControl может вернуть успех, в то время как сама SCSI-команда
+    завершилась ошибкой (CHECK CONDITION и т.п.) — статус лежит в поле
+    ScsiStatus (offset 2 заголовка SCSI_PASS_THROUGH). Без этой проверки
+    мусорный буфер данных трактуется как валидный ответ.
+
+    Raises:
+        IoctlFailed при ненулевом ScsiStatus (включает sense data в сообщение).
+    """
+    if len(result) <= 2:
+        raise IoctlFailed(context, 0, "Response too short for SCSI status")
+    status = result[2]
+    if status != 0:
+        name = _SCSI_STATUS_NAMES.get(status, "vendor/unknown")
+        msg = f"SCSI status 0x{status:02X} ({name})"
+        # Sense data (первые 18 байт fixed format) — полезно для диагностики
+        if sense_offset and len(result) >= sense_offset + 18:
+            sense = result[sense_offset:sense_offset + 18]
+            if any(sense):
+                msg += f", sense={bytes(sense).hex()}"
+        raise IoctlFailed(context, status, msg)
+
+
 # Размер одной записи атрибута в SMART data
 _ATTR_RECORD_SIZE = 12
 # Максимум атрибутов в одном блоке
@@ -265,6 +303,7 @@ def _scsi_sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = 
     buf[cdb_offset + 14] = ATA_SMART_CMD  # Command = 0xB0
 
     result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+    check_scsi_status(result, sense_offset, "SAT SMART command")
 
     if data_in and len(result) >= data_offset + 512:
         return result[data_offset:data_offset + 512]
@@ -545,6 +584,7 @@ def _scsi_inquiry_vpd_ata_info(handle: DeviceHandle) -> bytes:
     buf[cdb_offset + 5] = 0             # Control
 
     result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+    check_scsi_status(result, sense_offset, "INQUIRY VPD 0x89")
 
     if len(result) >= data_offset + 60:
         return result[data_offset:data_offset + data_size]
@@ -592,6 +632,7 @@ def _scsi_sat_identify_device(handle: DeviceHandle) -> bytes:
     buf[cdb_offset + 14] = 0xEC          # Command = IDENTIFY DEVICE
 
     result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+    check_scsi_status(result, sense_offset, "SAT IDENTIFY DEVICE")
 
     if len(result) >= data_offset + 512:
         return result[data_offset:data_offset + 512]

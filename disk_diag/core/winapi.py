@@ -600,25 +600,28 @@ def lock_and_dismount_volumes(drive_number: int) -> VolumeLockResult:
         if handle_val is None or handle_val == _INVALID_HANDLE:
             return VolumeLockResult(volume_handles, failed_volumes)
 
-        while True:
-            vol_guid = buf.value  # \\?\Volume{GUID}\
-            # Преобразуем в формат для CreateFile: убираем trailing backslash
-            if vol_guid.endswith("\\"):
-                vol_path = vol_guid[:-1]
-            else:
-                vol_path = vol_guid
+        # find_h валиден — гарантируем FindVolumeClose даже при исключении
+        # внутри цикла (иначе handle перечисления утекает до конца процесса)
+        try:
+            while True:
+                vol_guid = buf.value  # \\?\Volume{GUID}\
+                # Преобразуем в формат для CreateFile: убираем trailing backslash
+                if vol_guid.endswith("\\"):
+                    vol_path = vol_guid[:-1]
+                else:
+                    vol_path = vol_guid
 
-            if vol_path not in seen_paths:
-                label = vol_guid[:40]
-                result = _try_lock_volume(vol_path, drive_number, label)
-                if result[0] is not None:
-                    _process(result, label)
-                    seen_paths.add(vol_path)
+                if vol_path not in seen_paths:
+                    label = vol_guid[:40]
+                    result = _try_lock_volume(vol_path, drive_number, label)
+                    if result[0] is not None:
+                        _process(result, label)
+                        seen_paths.add(vol_path)
 
-            if not _FindNextVolumeW(find_h, buf, 260):
-                break
-
-        _FindVolumeClose(find_h)
+                if not _FindNextVolumeW(find_h, buf, 260):
+                    break
+        finally:
+            _FindVolumeClose(find_h)
     except Exception as e:
         logger.debug(f"FindFirstVolume enumeration failed: {e}")
 

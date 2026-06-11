@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import datetime
 from typing import Optional
 
@@ -53,25 +54,26 @@ def save_test(serial: str, model: str, version: str,
               penalties: list = None, notes: str = ""):
     """Сохранить результат теста в историю."""
     try:
-        db = _get_db()
-        db.execute(
-            """INSERT INTO test_history
-               (timestamp, serial, model, tool_version,
-                health_score, temperature, tbw_consumed_tb, power_on_hours,
-                seq_read_mbps, seq_write_mbps, random_4k_iops, waf,
-                penalties, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                datetime.now().isoformat(),
-                serial, model, version,
-                health_score, temperature, tbw_consumed_tb, power_on_hours,
-                seq_read_mbps, seq_write_mbps, random_4k_iops, waf,
-                json.dumps(penalties or [], ensure_ascii=False),
-                notes,
+        # closing() гарантирует db.close() даже при ошибке SQL —
+        # без него соединения копились в долгоживущем GUI-процессе
+        with closing(_get_db()) as db:
+            db.execute(
+                """INSERT INTO test_history
+                   (timestamp, serial, model, tool_version,
+                    health_score, temperature, tbw_consumed_tb, power_on_hours,
+                    seq_read_mbps, seq_write_mbps, random_4k_iops, waf,
+                    penalties, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    datetime.now().isoformat(),
+                    serial, model, version,
+                    health_score, temperature, tbw_consumed_tb, power_on_hours,
+                    seq_read_mbps, seq_write_mbps, random_4k_iops, waf,
+                    json.dumps(penalties or [], ensure_ascii=False),
+                    notes,
+                )
             )
-        )
-        db.commit()
-        db.close()
+            db.commit()
         logger.info(f"History saved for {model} ({serial[:16]})")
     except Exception as e:
         logger.warning(f"Cannot save history: {e}")
@@ -80,21 +82,20 @@ def save_test(serial: str, model: str, version: str,
 def get_history(serial: str) -> list[dict]:
     """Получить историю тестов для диска по серийному номеру."""
     try:
-        db = _get_db()
-        cursor = db.execute(
-            """SELECT timestamp, tool_version,
-                      health_score, temperature, tbw_consumed_tb, power_on_hours,
-                      seq_read_mbps, seq_write_mbps, random_4k_iops, waf,
-                      penalties, notes
-               FROM test_history
-               WHERE serial = ?
-               ORDER BY timestamp DESC
-               LIMIT 50""",
-            (serial,)
-        )
-        columns = [d[0] for d in cursor.description]
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        db.close()
+        with closing(_get_db()) as db:
+            cursor = db.execute(
+                """SELECT timestamp, tool_version,
+                          health_score, temperature, tbw_consumed_tb, power_on_hours,
+                          seq_read_mbps, seq_write_mbps, random_4k_iops, waf,
+                          penalties, notes
+                   FROM test_history
+                   WHERE serial = ?
+                   ORDER BY timestamp DESC
+                   LIMIT 50""",
+                (serial,)
+            )
+            columns = [d[0] for d in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
         for row in rows:
             try:
@@ -111,20 +112,19 @@ def get_history(serial: str) -> list[dict]:
 def get_all_disks() -> list[dict]:
     """Получить список всех дисков в истории."""
     try:
-        db = _get_db()
-        cursor = db.execute(
-            """SELECT serial, model,
-                      COUNT(*) as test_count,
-                      MAX(timestamp) as last_test,
-                      MIN(health_score) as min_score,
-                      MAX(health_score) as max_score
-               FROM test_history
-               GROUP BY serial
-               ORDER BY last_test DESC"""
-        )
-        columns = [d[0] for d in cursor.description]
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        db.close()
+        with closing(_get_db()) as db:
+            cursor = db.execute(
+                """SELECT serial, model,
+                          COUNT(*) as test_count,
+                          MAX(timestamp) as last_test,
+                          MIN(health_score) as min_score,
+                          MAX(health_score) as max_score
+                   FROM test_history
+                   GROUP BY serial
+                   ORDER BY last_test DESC"""
+            )
+            columns = [d[0] for d in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
         return rows
     except Exception as e:
         logger.warning(f"Cannot read disk list: {e}")

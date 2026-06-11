@@ -18,6 +18,7 @@ from typing import Optional
 from .winapi import DeviceHandle, IoctlFailed
 from .structures import SCSI_PASS_THROUGH
 from .constants import IOCTL_SCSI_PASS_THROUGH, SCSI_IOCTL_DATA_IN
+from .smart_ata import check_scsi_status
 from .smart_nvme import _parse_raw_health
 from .models import NvmeHealthInfo
 
@@ -89,6 +90,11 @@ def _scsi_cmd(handle: DeviceHandle, cdb: bytes | bytearray,
             buf[data_offset + i] = b
 
     result = handle.ioctl_raw(IOCTL_SCSI_PASS_THROUGH, bytes(buf), total_size)
+
+    # Ненулевой ScsiStatus = команда отклонена мостом, даже если IOCTL прошёл.
+    # Проверяем и для DATA_OUT (JMicron step 1: непринятая NVMe-команда без
+    # этой проверки молча "удавалась", а step 2 возвращал мусор).
+    check_scsi_status(result, sense_offset, "USB-NVMe bridge command")
 
     # DATA_OUT: ответ — только заголовок (без данных), это нормально
     if direction == _DATA_OUT:
@@ -183,6 +189,23 @@ _BRIDGE_METHODS = [
 ]
 
 
+def _looks_valid_health_page(raw: bytes) -> bool:
+    """Структурная валидация NVMe Health Page от USB-моста.
+
+    Мост может вернуть 512 байт мусора с ненулевыми байтами — проверка
+    any(raw[:32]) этого не ловила. Проверяем правдоподобность известных полей:
+    - Composite Temperature (байты 1-2, Кельвины): 200..400 K = −73..127 °C
+    - либо, если температура не заполнена (бывает на части прошивок):
+      Available Spare и его Threshold (байты 3, 4) — по спеке проценты 0..100.
+    """
+    if not raw or len(raw) < 512 or not any(raw[:32]):
+        return False
+    temp_k = int.from_bytes(raw[1:3], "little")
+    if 200 <= temp_k <= 400:
+        return True
+    return raw[3] <= 100 and raw[4] <= 100
+
+
 def read_usb_nvme_smart(drive_number: int) -> Optional[NvmeHealthInfo]:
     """Try to read NVMe SMART through USB-NVMe bridge.
 
@@ -194,12 +217,13 @@ def read_usb_nvme_smart(drive_number: int) -> Optional[NvmeHealthInfo]:
             with DeviceHandle(drive_number, read_only=False) as h:
                 raw = method(h)
 
-            if raw and len(raw) >= 512 and any(raw[:32]):
+            if _looks_valid_health_page(raw):
                 health = _parse_raw_health(bytes(raw))
                 logger.info(f"USB-NVMe SMART OK via {name} bridge")
                 return health
 
-            logger.debug(f"USB-NVMe {name}: got data but looks empty")
+            logger.debug(f"USB-NVMe {name}: got data but failed validation "
+                         f"(empty or implausible health page)")
 
         except Exception as e:
             logger.debug(f"USB-NVMe {name} failed: {e}")
