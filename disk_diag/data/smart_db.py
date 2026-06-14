@@ -79,6 +79,15 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
     100: _a(100, "Erase/Program Cycles",          "Циклы стирания/записи",
                "Total erase/program cycles (Kingston)",
                "Общее количество циклов стирания/записи (Kingston)", False),
+    101: _a(101, "Vendor-Specific (Marvell)",     "Служебный (Marvell)",
+               "Undocumented vendor-specific counter on Kingston UV400/UV500 "
+               "(Marvell 88SS1074). Kingston does not publish its meaning and "
+               "smartmontools reports it as Unknown — paired with ID 100. "
+               "Informational only, does not indicate a problem.",
+               "Недокументированный служебный счётчик Kingston UV400/UV500 "
+               "(контроллер Marvell 88SS1074). Kingston не публикует его значение, "
+               "smartmontools тоже показывает его как Unknown — идёт в паре с ID 100. "
+               "Информационный, проблему не означает.", False),
     148: _a(148, "Total NAND Erase Count",        "Всего стираний NAND",
                "Total NAND erase count (Kingston SSD)",
                "Общее количество стираний NAND (Kingston SSD)", False),
