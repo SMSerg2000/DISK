@@ -554,5 +554,5 @@ ie4uinit.exe -show
 
 ---
 
-*DISK Diagnostic Tool v2.3.5 — User Guide*
+*DISK Diagnostic Tool v2.3.6 — User Guide*
 *Developed by Serg and Claudine (Anthropic AI)*

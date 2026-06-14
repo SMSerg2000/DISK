@@ -246,6 +246,13 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
     220: _a(220, "Disk Shift",                    "Смещение диска",
                "Disk shift relative to spindle",
                "Смещение диска относительно шпинделя", False),
+    223: _a(223, "Load/Unload Retry Count",       "Повторы парковки головок",
+               "Count of head load/unload retries (head entering/leaving the "
+               "data zone) on HDD. Informational — a rising value can reflect "
+               "mechanical wear or physical stress, but is not a failure on its own.",
+               "Количество повторов загрузки/выгрузки головок (вход/выход в зону "
+               "данных) на HDD. Информационный — рост может говорить об износе "
+               "механики или ударах, но сам по себе отказом не является.", False),
     226: _a(226, "Load-In Time",                  "Время загрузки головок",
                "Head load-in time",
                "Время загрузки головок на поверхность", False),
