@@ -238,6 +238,19 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
     204: _a(204, "Soft ECC Correction",           "Программная коррекция ECC",
                "Soft ECC correction count (SandForce)",
                "Количество программных коррекций ECC (SandForce)", False),
+    206: _a(206, "Flying Height",                 "Высота полёта головок",
+               "Legacy HDD attribute (head-to-platter distance). Meaningless "
+               "on SSD (Crucial/Micron MX500), normally raw=0.",
+               "Унаследованный от HDD атрибут (высота головок над пластиной). "
+               "На SSD (Crucial/Micron MX500) смысла не имеет, обычно raw=0.", False),
+    210: _a(210, "RAIN Successful Recovery",      "Восстановления RAIN",
+               "RAIN (Redundant Array of Independent NAND) successful recovery "
+               "page count — internal NAND-parity data recoveries (Crucial/Micron). "
+               "Rare; a large value warrants attention to other wear attributes.",
+               "Успешные восстановления через RAIN (избыточный массив независимых "
+               "NAND) — внутреннее восстановление данных по NAND-чётности "
+               "(Crucial/Micron). Редки; большое значение — повод присмотреться "
+               "к атрибутам износа.", False),
 
     # === Samsung SSD-специфичные ===
     230: _a(230, "Drive Life Protection Status", "Статус защиты ресурса",
@@ -292,6 +305,16 @@ SMART_ATTRIBUTES: dict[int, SmartAttributeInfo] = {
     246: _a(246, "Total Host Sector Writes",      "Всего записано секторов",
                "Cumulative host sector write count (Phison)",
                "Суммарное количество записанных секторов хостом (Phison)", False),
+    247: _a(247, "Host Program Page Count",       "Записано страниц (хост)",
+               "NAND pages programmed by host requests (Crucial/Micron). "
+               "Together with ID 248 gives write amplification: (247+248)/247.",
+               "NAND-страницы, записанные по запросу хоста (Crucial/Micron). "
+               "Вместе с ID 248 даёт коэффициент усиления записи: (247+248)/247.", False),
+    248: _a(248, "Background Program Page Count", "Записано страниц (фон)",
+               "NAND pages programmed by background ops like garbage collection "
+               "(Crucial/Micron). NOT total NAND writes — pair with ID 247 for WAF.",
+               "NAND-страницы, записанные фоновыми операциями (сборка мусора и др., "
+               "Crucial/Micron). Это НЕ полный объём записи NAND — нужна пара с ID 247.", False),
     249: _a(249, "NAND Writes (1GiB)",            "Записи NAND (ГиБ)",
                "Total NAND writes in GiB (SSD)",
                "Всего записано на NAND, GiB (SSD)", False, "GiB"),
