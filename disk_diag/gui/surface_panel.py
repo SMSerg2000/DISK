@@ -588,10 +588,38 @@ class SurfaceScanPanel(QWidget):
         self._bad_lbas: list[int] = []
 
     def _start_scan(self):
+        """Обёртка: ловит ЛЮБОЕ исключение, чтобы запуск скана не падал
+        молча (окно --windowed без консоли → traceback теряется = 'ничего
+        не произошло'). Деструктивная операция обязана сообщать об ошибке.
+        """
+        try:
+            self._do_start_scan()
+        except Exception as e:
+            logger.exception("Surface scan start failed")
+            # Восстановить интерактивность панели
+            self._btn_start.setEnabled(self._drive_number is not None)
+            self._btn_stop.setEnabled(False)
+            self._block_combo.setEnabled(True)
+            self._mode_combo.setEnabled(True)
+            self._slow_check.setEnabled(True)
+            self._from_edit.setEnabled(True)
+            self._to_edit.setEnabled(True)
+            self._status.setText(tr("Start error", "Ошибка запуска"))
+            self._status.setStyleSheet("color: #f38ba8;")
+            QMessageBox.critical(
+                self,
+                tr("Surface Scan — Start Error", "Сканирование — ошибка запуска"),
+                tr(f"Failed to start scan:\n\n{type(e).__name__}: {e}",
+                   f"Не удалось запустить сканирование:\n\n{type(e).__name__}: {e}"),
+            )
+
+    def _do_start_scan(self):
         if self._drive_number is None:
             return
 
         mode = self._mode_combo.currentData()
+        logger.info(f"Surface scan start requested: mode={mode}, "
+                    f"drive={self._drive_number}, model={self._model!r}")
 
         erase_slow = self._slow_check.isChecked() and mode == ScanMode.ERASE
 
@@ -732,7 +760,6 @@ class SurfaceScanPanel(QWidget):
                 erase_slow, start_bytes, end_bytes,
             )
         except ValueError as e:
-            from PySide6.QtWidgets import QMessageBox
             self._mode_combo.setEnabled(True)
             self._slow_check.setEnabled(True)
             self._from_edit.setEnabled(True)
