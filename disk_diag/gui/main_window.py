@@ -53,7 +53,8 @@ class _SmartWorker(QObject):
                 dn = self.drive_info.drive_number
                 # 1) USB-SATA: ATA Pass-Through / SCSI SAT
                 with DeviceHandle(dn) as h:
-                    attrs = read_smart_via_sat(h)
+                    attrs = read_smart_via_sat(h, self.drive_info.model,
+                                               self.drive_info.firmware_revision)
                 if attrs:
                     status = assess_ata_health(attrs, cap, self.drive_info.model, self.drive_info.firmware_revision)
                     self.finished.emit(("ata", attrs, status))
@@ -74,7 +75,9 @@ class _SmartWorker(QObject):
                     self.finished.emit(("none", None, None))
             elif self.drive_info.smart_supported:
                 with DeviceHandle(self.drive_info.drive_number) as h:
-                    attrs = read_smart_attributes(h, self.drive_info.drive_number)
+                    attrs = read_smart_attributes(h, self.drive_info.drive_number,
+                                                  self.drive_info.model,
+                                                  self.drive_info.firmware_revision)
                     status = assess_ata_health(attrs, cap, self.drive_info.model, self.drive_info.firmware_revision)
                     self.finished.emit(("ata", attrs, status))
             else:

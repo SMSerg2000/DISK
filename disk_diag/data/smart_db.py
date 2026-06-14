@@ -333,12 +333,29 @@ SSD_INDICATOR_ATTRS = {
 }
 
 
-def get_attribute_name(attr_id: int) -> str:
+def get_attribute_name(attr_id: int, override: Optional[dict] = None) -> str:
+    """Имя атрибута. override — vendor-специфичное переопределение
+    (см. vendor_profiles.get_attribute_override), имеет приоритет над базой.
+    """
+    if override and override.get("name_en"):
+        return tr(override["name_en"], override["name_ru"])
     info = SMART_ATTRIBUTES.get(attr_id)
     return info.name if info else tr(f"Unknown ({attr_id})", f"Неизвестный ({attr_id})")
 
 
-def is_critical_attribute(attr_id: int) -> bool:
+def get_attribute_description(attr_id: int, override: Optional[dict] = None) -> str:
+    """Описание атрибута с учётом vendor-переопределения."""
+    if override and override.get("desc_en"):
+        return tr(override["desc_en"], override["desc_ru"])
+    info = SMART_ATTRIBUTES.get(attr_id)
+    return info.description if info else ""
+
+
+def is_critical_attribute(attr_id: int, override: Optional[dict] = None) -> bool:
+    """Критичность атрибута. override может переопределить (напр. 202 у Crucial
+    — не критичный индикатор ресурса, а не ошибки)."""
+    if override and "critical" in override:
+        return bool(override["critical"])
     info = SMART_ATTRIBUTES.get(attr_id)
     return info.is_critical if info else False
 

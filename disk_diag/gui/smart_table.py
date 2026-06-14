@@ -7,7 +7,8 @@ from PySide6.QtGui import QColor, QBrush
 from ..core.models import SmartAttribute, NvmeHealthInfo, HealthLevel, HealthStatus
 from ..utils.formatting import format_capacity, format_hours, format_smart_raw
 from ..data.nvme_fields import NVME_HEALTH_FIELDS
-from ..data.smart_db import get_attribute_info
+from ..data.smart_db import (get_attribute_info, get_attribute_description,
+                             is_critical_attribute)
 from ..i18n import tr
 
 # Цвета строк по уровню здоровья
@@ -56,7 +57,8 @@ class SmartTableWidget(QTableWidget):
     def set_ata_attributes(self, attributes: list[SmartAttribute],
                           model: str = "", firmware: str = ""):
         """Заполнить таблицу ATA SMART-атрибутами."""
-        from ..data.vendor_profiles import match_profile, get_decoded_tooltip
+        from ..data.vendor_profiles import (match_profile, get_decoded_tooltip,
+                                            get_attribute_override)
         _vp = match_profile(model, firmware)
         self.setSortingEnabled(False)
         self.clear()
@@ -73,12 +75,16 @@ class SmartTableWidget(QTableWidget):
             id_item.setData(Qt.ItemDataRole.DisplayRole, attr.id)
             id_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            # Описание для панели (хранится в UserRole первого столбца)
+            # Описание для панели (хранится в UserRole первого столбца).
+            # Учитываем vendor-переопределение имени/описания/критичности
+            # (напр. ID 202 у Crucial/Micron = остаток ресурса, не address mark).
+            _ov = get_attribute_override(_vp, attr.id)
             info = get_attribute_info(attr.id)
-            if info:
-                desc = f"<b>{info.name}</b> (ID {attr.id})"
-                desc += f"<br>{info.description}"
-                if info.is_critical:
+            attr_critical = is_critical_attribute(attr.id, _ov)
+            if info or _ov:
+                desc = f"<b>{attr.name}</b> (ID {attr.id})"
+                desc += f"<br>{get_attribute_description(attr.id, _ov)}"
+                if attr_critical:
                     crit_msg = tr("⚠ Critical attribute — affects drive reliability",
                                   "⚠ Критический атрибут — влияет на надёжность диска")
                     desc += f'<br><span style="color: #f9e2af;">{crit_msg}</span>'
@@ -91,7 +97,7 @@ class SmartTableWidget(QTableWidget):
 
             # Name (+ синий цвет для критических)
             name_item = QTableWidgetItem(attr.name)
-            if info and info.is_critical:
+            if attr_critical:
                 name_item.setForeground(QColor(137, 180, 250))  # blue — критический атрибут
 
             # Current

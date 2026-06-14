@@ -114,6 +114,33 @@ VENDOR_PROFILES = [
         },
         "confidence": "medium",
     },
+    {
+        "name": "Crucial/Micron MX-series (Silicon Motion SM2258)",
+        "match": {
+            "model_contains": ["MX500", "MX300", "MX200", "MX100",
+                               "CRUCIAL", "MICRON"],
+        },
+        "decode": {
+            9:   {"method": "raw"},
+            194: {"method": "low8"},
+        },
+        # Переопределение ИМЁН атрибутов: ID 202 у Crucial/Micron — это НЕ
+        # "Address Mark Errors" (классика HDD), а процент оставшегося ресурса.
+        "names": {
+            202: {
+                "name_en": "Percentage Lifetime Remaining",
+                "name_ru": "Остаток ресурса (%)",
+                "desc_en": "Percentage of rated lifetime remaining (Crucial/Micron). "
+                           "100 = new, 0 = rated life reached (NOT a failure). The "
+                           "normalized value also estimates unpowered data retention.",
+                "desc_ru": "Процент оставшегося расчётного ресурса (Crucial/Micron). "
+                           "100 = новый, 0 = ресурс исчерпан (это НЕ отказ). Нормализованное "
+                           "значение также оценивает срок хранения данных без питания.",
+                "critical": False,
+            },
+        },
+        "confidence": "high",
+    },
 ]
 
 
@@ -152,6 +179,19 @@ _DEFAULT_DECODE = {
     190: "low8",   # Airflow Temperature — ВСЕГДА low byte
     194: "low8",   # Temperature — ВСЕГДА low byte
 }
+
+
+def get_attribute_override(profile: Optional[dict], attr_id: int) -> Optional[dict]:
+    """Вернуть переопределение имени/описания/критичности атрибута для профиля.
+
+    Некоторые SMART ID имеют РАЗНЫЙ смысл у разных вендоров (напр. 202 =
+    Address Mark Errors у HDD, но Percentage Lifetime Remaining у Crucial/Micron).
+    Профиль может задать поле "names": {attr_id: {name_en, name_ru, desc_en,
+    desc_ru, critical}}. Возвращает этот dict или None.
+    """
+    if not profile:
+        return None
+    return profile.get("names", {}).get(attr_id)
 
 
 def decode_raw(profile: Optional[dict], attr_id: int, raw_value: int) -> int:

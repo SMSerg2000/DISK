@@ -68,9 +68,10 @@ def cmd_smart(drive_number: int, as_json: bool):
         data_type = "nvme"
     elif drive.interface_type == InterfaceType.USB:
         with DeviceHandle(drive_number) as h:
-            attrs = read_smart_via_sat(h)
+            attrs = read_smart_via_sat(h, drive.model, drive.firmware_revision)
         if attrs:
-            status = assess_ata_health(attrs, drive.capacity_bytes)
+            status = assess_ata_health(attrs, drive.capacity_bytes,
+                                       drive.model, drive.firmware_revision)
             data_type = "ata"
         else:
             health_info = read_usb_nvme_smart(drive_number)
@@ -86,8 +87,10 @@ def cmd_smart(drive_number: int, as_json: bool):
                     pass
     elif drive.smart_supported:
         with DeviceHandle(drive_number) as h:
-            attrs = read_smart_attributes(h, drive_number)
-            status = assess_ata_health(attrs, drive.capacity_bytes)
+            attrs = read_smart_attributes(h, drive_number,
+                                          drive.model, drive.firmware_revision)
+            status = assess_ata_health(attrs, drive.capacity_bytes,
+                                       drive.model, drive.firmware_revision)
             data_type = "ata"
 
     if not status:

@@ -23,6 +23,7 @@ from .structures import (
 from .winapi import DeviceHandle, IoctlFailed
 from .models import SmartAttribute, HealthLevel, DriveType
 from ..data.smart_db import get_attribute_name, is_critical_attribute, SSD_INDICATOR_ATTRS
+from ..data.vendor_profiles import match_profile, get_attribute_override
 
 logger = logging.getLogger(__name__)
 
@@ -310,16 +311,21 @@ def _scsi_sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = 
     return b""
 
 
-def read_smart_via_sat(handle: DeviceHandle) -> list[SmartAttribute]:
+def read_smart_via_sat(handle: DeviceHandle, model: str = "",
+                       firmware: str = "") -> list[SmartAttribute]:
     """Прочитать SMART через ATA Pass-Through (для USB-дисков).
 
     Пробует два метода:
     1. IOCTL_ATA_PASS_THROUGH — простой, но не все USB-мосты поддерживают
     2. IOCTL_SCSI_PASS_THROUGH + SAT CDB — более универсальный
 
+    model/firmware — для vendor-профиля (переопределение имён атрибутов,
+    напр. ID 202 у Crucial/Micron = остаток ресурса, а не address mark errors).
+
     Returns:
         Список SmartAttribute или пустой список если оба метода не работают.
     """
+    profile = match_profile(model, firmware) if model else None
     # Выбираем функцию отправки команд: сначала ATA PT, потом SCSI SAT
     send_fn = None
 
@@ -374,9 +380,10 @@ def read_smart_via_sat(handle: DeviceHandle) -> list[SmartAttribute]:
     result = []
     for attr in raw_attrs:
         attr_id = attr["id"]
+        override = get_attribute_override(profile, attr_id)
         threshold = thresholds.get(attr_id, 0)
         current = attr["current"]
-        is_critical = is_critical_attribute(attr_id)
+        is_critical = is_critical_attribute(attr_id, override)
 
         if threshold > 0 and current <= threshold:
             health = HealthLevel.CRITICAL
@@ -389,7 +396,7 @@ def read_smart_via_sat(handle: DeviceHandle) -> list[SmartAttribute]:
 
         result.append(SmartAttribute(
             id=attr_id,
-            name=get_attribute_name(attr_id),
+            name=get_attribute_name(attr_id, override),
             current=current,
             worst=attr["worst"],
             threshold=threshold,
@@ -403,16 +410,20 @@ def read_smart_via_sat(handle: DeviceHandle) -> list[SmartAttribute]:
     return result
 
 
-def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[SmartAttribute]:
+def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0,
+                          model: str = "", firmware: str = "") -> list[SmartAttribute]:
     """Прочитать SMART-атрибуты и пороги для ATA/SATA диска.
 
     Args:
         handle: Открытый DeviceHandle
         drive_number: Номер диска (для логирования, bDriveNumber всегда 0)
+        model/firmware: для vendor-профиля (переопределение имён атрибутов,
+            напр. ID 202 у Crucial/Micron = остаток ресурса, не address mark errors)
 
     Returns:
         Список SmartAttribute с заполненными полями
     """
+    profile = match_profile(model, firmware) if model else None
     out_size = ctypes.sizeof(SENDCMDOUTPARAMS)
 
     # 0. Включаем SMART (некоторые диски требуют явного enable)
@@ -452,10 +463,11 @@ def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[S
     result = []
     for attr in raw_attrs:
         attr_id = attr["id"]
+        override = get_attribute_override(profile, attr_id)
         threshold = thresholds.get(attr_id, 0)
         current = attr["current"]
         worst = attr["worst"]
-        is_critical = is_critical_attribute(attr_id)
+        is_critical = is_critical_attribute(attr_id, override)
 
         # Определяем уровень здоровья
         if threshold > 0 and current <= threshold:
@@ -469,7 +481,7 @@ def read_smart_attributes(handle: DeviceHandle, drive_number: int = 0) -> list[S
 
         result.append(SmartAttribute(
             id=attr_id,
-            name=get_attribute_name(attr_id),
+            name=get_attribute_name(attr_id, override),
             current=current,
             worst=worst,
             threshold=threshold,
