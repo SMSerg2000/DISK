@@ -1,6 +1,6 @@
 [project]
 name = "disk_diag"
-version = "2.4.1"
+version = "2.4.2"
 description = "Windows SMART/SSD/HDD diagnostic tool — Victoria HDD analog on Python + PySide6"
 readme = "README.md"
 requires-python = ">=3.12"

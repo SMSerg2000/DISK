@@ -154,17 +154,15 @@ class SmartTableWidget(QTableWidget):
                     item.setBackground(QBrush(row_color))
 
         # Настройка ширины колонок.
-        # Колонка "Атрибут" (1) — ResizeToContents: ширина по самому длинному
-        # имени, ВСЕГДА показывает имя целиком и не зависит от геометрии окна
-        # при запуске (Stretch ранее схлопывал её, обрезая длинные имена).
-        # Stretch отдан Status (6) — забирает свободное место справа.
+        # Колонка "Атрибут" (1) — Stretch: забирает всё свободное место и
+        # растягивает таблицу на всю ширину окна, имена видны широко.
+        # Остальные (числа/статус) — по содержимому.
         header = self.horizontalHeader()
-        header.setMinimumSectionSize(55)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 50)
-        for col in range(1, 6):  # Атрибут, Текущ, Худш, Порог, Raw
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for col in range(2, 7):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)  # Status
 
         self.setSortingEnabled(True)
 
@@ -319,13 +317,11 @@ class SmartTableWidget(QTableWidget):
                 if item:
                     item.setBackground(QBrush(row_color))
 
-        # Параметр (0) по контенту — полное имя видно при запуске; Статус (2)
-        # растягивается на остаток (как в ATA-таблице, см. set_ata_attributes)
+        # Параметр (0) — Stretch на всю ширину; Значение/Статус — по контенту
         header = self.horizontalHeader()
-        header.setMinimumSectionSize(55)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
         self.setSortingEnabled(True)
 
