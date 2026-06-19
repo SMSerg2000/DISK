@@ -1,7 +1,7 @@
 """Таблица SMART-атрибутов с цветовой кодировкой."""
 
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush
 
 from ..core.models import SmartAttribute, NvmeHealthInfo, HealthLevel, HealthStatus
@@ -43,6 +43,17 @@ class SmartTableWidget(QTableWidget):
         self.verticalHeader().setVisible(False)
 
         self.currentCellChanged.connect(self._on_cell_changed)
+
+    def resizeEvent(self, event):
+        """При изменении размера окна — переприменить ширину колонок,
+        чтобы колонка имени всегда растягивалась на всю ширину (страховка
+        на случай если Stretch не пересчитался реактивно)."""
+        super().resizeEvent(event)
+        cols = self.columnCount()
+        if cols == 7:
+            self._apply_ata_column_widths()
+        elif cols == 3:
+            self._apply_nvme_column_widths()
 
     def _on_cell_changed(self, row, col, prev_row, prev_col):
         """При смене выделенной строки — показать описание атрибута."""
@@ -153,18 +164,26 @@ class SmartTableWidget(QTableWidget):
                 if item:
                     item.setBackground(QBrush(row_color))
 
-        # Настройка ширины колонок.
-        # Колонка "Атрибут" (1) — Stretch: забирает всё свободное место и
-        # растягивает таблицу на всю ширину окна, имена видны широко.
-        # Остальные (числа/статус) — по содержимому.
+        self.setSortingEnabled(True)
+        # Настройка ширины колонок — синхронно И отложенно. Отложенный вызов
+        # (singleShot 0) выполняется после того как Qt применит финальную
+        # геометрию окна: при асинхронном заполнении из worker-потока на
+        # развёрнутом окне ширина таблицы в момент set_*() ещё переходная,
+        # и Stretch-колонка иначе залипает на узкой ширине.
+        self._apply_ata_column_widths()
+        QTimer.singleShot(0, self._apply_ata_column_widths)
+
+    def _apply_ata_column_widths(self):
+        """Колонка 'Атрибут' (1) = Stretch (на всю ширину), ID = Fixed 50,
+        числовые/статус — по содержимому."""
+        if self.columnCount() < 7:
+            return
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 50)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         for col in range(2, 7):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-
-        self.setSortingEnabled(True)
 
     def set_nvme_health(self, info: NvmeHealthInfo, status: HealthStatus):
         """Заполнить таблицу данными NVMe Health Info."""
@@ -317,13 +336,18 @@ class SmartTableWidget(QTableWidget):
                 if item:
                     item.setBackground(QBrush(row_color))
 
-        # Параметр (0) — Stretch на всю ширину; Значение/Статус — по контенту
+        self.setSortingEnabled(True)
+        self._apply_nvme_column_widths()
+        QTimer.singleShot(0, self._apply_nvme_column_widths)
+
+    def _apply_nvme_column_widths(self):
+        """Параметр (0) = Stretch на всю ширину; Значение/Статус по контенту."""
+        if self.columnCount() != 3:
+            return
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-
-        self.setSortingEnabled(True)
 
     def show_message(self, message: str):
         """Показать сообщение вместо данных (напр. 'SMART not supported')."""
