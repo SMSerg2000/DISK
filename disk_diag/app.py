@@ -47,7 +47,10 @@ def run_application():
     app.setFont(font)
 
     window = MainWindow()
-    window.show()
+    # Разворачиваем на весь экран сразу — широкие SMART-таблицы должны
+    # заполнять всю ширину с первого показа (иначе Stretch-колонки
+    # вычисляются на узком дефолте 1050px и не догоняют при ручном развороте)
+    window.showMaximized()
 
     logger.info("Application started")
     sys.exit(app.exec())

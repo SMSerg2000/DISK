@@ -446,5 +446,5 @@ ie4uinit.exe -show
 
 ---
 
-*DISK Diagnostic Tool v2.4.2 — Руководство пользователя*
+*DISK Diagnostic Tool v2.4.3 — Руководство пользователя*
 *Разработано Сержем и Клодин (Anthropic AI)*
