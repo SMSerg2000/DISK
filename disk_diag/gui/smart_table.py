@@ -153,13 +153,18 @@ class SmartTableWidget(QTableWidget):
                 if item:
                     item.setBackground(QBrush(row_color))
 
-        # Настройка ширины колонок
+        # Настройка ширины колонок.
+        # Колонка "Атрибут" (1) — ResizeToContents: ширина по самому длинному
+        # имени, ВСЕГДА показывает имя целиком и не зависит от геометрии окна
+        # при запуске (Stretch ранее схлопывал её, обрезая длинные имена).
+        # Stretch отдан Status (6) — забирает свободное место справа.
         header = self.horizontalHeader()
+        header.setMinimumSectionSize(55)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 50)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for col in range(2, 7):
+        for col in range(1, 6):  # Атрибут, Текущ, Худш, Порог, Raw
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)  # Status
 
         self.setSortingEnabled(True)
 
@@ -314,10 +319,13 @@ class SmartTableWidget(QTableWidget):
                 if item:
                     item.setBackground(QBrush(row_color))
 
+        # Параметр (0) по контенту — полное имя видно при запуске; Статус (2)
+        # растягивается на остаток (как в ATA-таблице, см. set_ata_attributes)
         header = self.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setMinimumSectionSize(55)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
         self.setSortingEnabled(True)
 
