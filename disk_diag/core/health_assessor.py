@@ -92,9 +92,15 @@ def _ata_health_score(attributes: list[SmartAttribute],
         penalize(tr(f"Pending Sectors: {pending}", f"Ожидающие секторы: {pending}"),
                  min(20, pending * 4))
 
-    # SSD Life Left (ID 231)
+    # SSD Life Left (ID 231) — нормализованный остаток ресурса (100→0).
+    # ВАЖНО: штрафуем только если атрибут осмысленно заполнен. Многие Kingston
+    # на Silicon Motion (KC600, SM2259) репортят current=0 при raw=0 и
+    # threshold=0 — это неинициализированный атрибут-заглушка, а НЕ 100% износ
+    # (давало ложное "Износ SSD: 100%" −25 баллов новому диску). Реальный износ
+    # всегда имеет ненулевой raw-счётчик стираний или current в диапазоне 1-99.
     life_left = _get_attr_current(attributes, 231)
-    if life_left >= 0:
+    life_raw = _get_attr_raw(attributes, 231)
+    if life_left > 0 or (life_left == 0 and life_raw > 0):
         used_pct = 100 - life_left
         pts = 30 if used_pct > 100 else 25 if used_pct > 90 else 15 if used_pct > 80 else 5 if used_pct > 50 else 0
         if pts:
