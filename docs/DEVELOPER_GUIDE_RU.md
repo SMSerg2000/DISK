@@ -459,5 +459,5 @@ def _newbridge_get_smart(handle: DeviceHandle) -> bytes:
 
 ---
 
-*DISK Diagnostic Tool v2.6.0 — Руководство разработчика*
+*DISK Diagnostic Tool v2.7.0 — Руководство разработчика*
 *Разработано Сержем и Клодин (Anthropic AI)*

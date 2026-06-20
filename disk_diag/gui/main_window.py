@@ -13,7 +13,7 @@ from PySide6.QtGui import QKeySequence
 from datetime import datetime
 
 from .. import __version__, __app_name__
-from ..core.history import save_test
+from ..core.history import save_test, get_previous_snapshot
 from ..core.models import DriveInfo, DriveType, InterfaceType, HealthLevel, NvmeHealthInfo
 from ..data.nvme_fields import NVME_HEALTH_FIELDS
 from ..core.drive_enumerator import enumerate_drives
@@ -179,7 +179,24 @@ class MainWindow(QMainWindow):
         smart_layout.setContentsMargins(0, 0, 0, 0)
         smart_layout.setSpacing(4)
 
+        # Баннер тренда — показывается только при деградации SMART/NVMe
+        # (рост дефектных атрибутов с прошлого чтения). По умолчанию скрыт.
+        self._trend_banner = QLabel()
+        self._trend_banner.setWordWrap(True)
+        self._trend_banner.setTextFormat(Qt.TextFormat.RichText)
+        self._trend_banner.setStyleSheet(
+            "QLabel {"
+            "  background-color: #5f3c46;"  # тёмно-красный (деградация)
+            "  color: #f9e2af;"
+            "  padding: 6px 12px;"
+            "  border-radius: 6px;"
+            "  font-weight: bold;"
+            "}"
+        )
+        self._trend_banner.hide()
+
         self._smart_table = SmartTableWidget()
+        self._smart_table.trend_summary.connect(self._on_trend_summary)
         self._attr_desc = QLabel(tr("Select an attribute to see its description", "Выберите атрибут для просмотра описания"))
         self._attr_desc.setWordWrap(True)
         self._attr_desc.setMinimumHeight(50)
@@ -195,6 +212,7 @@ class MainWindow(QMainWindow):
         )
         self._smart_table.description_changed.connect(self._on_attr_description)
 
+        smart_layout.addWidget(self._trend_banner)
         smart_layout.addWidget(self._smart_table, stretch=1)
         smart_layout.addWidget(self._attr_desc)
 
@@ -343,6 +361,7 @@ class MainWindow(QMainWindow):
             return
 
         data_type = result[0]
+        snapshot = None  # снимок атрибутов для истории (trend)
 
         if data_type == "ata":
             _, attrs, status = result
@@ -351,8 +370,15 @@ class MainWindow(QMainWindow):
             self._smart_status = status
             self._export_action.setEnabled(True)
             drive = self._drive_selector.get_selected_drive()
+            # Прошлый снимок ДО сохранения нового — иначе сравним сами с собой
+            prev = get_previous_snapshot(drive.serial_number) if drive and drive.serial_number else None
+            prev_attrs = prev[1] if prev else None
+            prev_date = self._fmt_prev_date(prev[0]) if prev else ""
             self._smart_table.set_ata_attributes(
-                attrs, drive.model if drive else "", drive.firmware_revision if drive else "")
+                attrs, drive.model if drive else "",
+                drive.firmware_revision if drive else "",
+                previous=prev_attrs, prev_date=prev_date)
+            snapshot = {str(a.id): a.raw_value for a in attrs}
             self._health_indicator.set_status(status)
 
             # Обновляем тип диска и температуру по SMART данным
@@ -377,7 +403,22 @@ class MainWindow(QMainWindow):
             self._smart_nvme_health = health_info
             self._smart_status = status
             self._export_action.setEnabled(True)
-            self._smart_table.set_nvme_health(health_info, status)
+            drive = self._drive_selector.get_selected_drive()
+            prev = get_previous_snapshot(drive.serial_number) if drive and drive.serial_number else None
+            prev_attrs = prev[1] if prev else None
+            prev_date = self._fmt_prev_date(prev[0]) if prev else ""
+            self._smart_table.set_nvme_health(health_info, status,
+                                              previous=prev_attrs, prev_date=prev_date)
+            snapshot = {
+                "media_errors": health_info.media_errors,
+                "available_spare": health_info.available_spare,
+                "percentage_used": health_info.percentage_used,
+                "unsafe_shutdowns": health_info.unsafe_shutdowns,
+                "power_on_hours": health_info.power_on_hours,
+                "data_units_written": health_info.data_units_written,
+                "power_cycles": health_info.power_cycles,
+                "critical_warning": health_info.critical_warning,
+            }
             self._health_indicator.set_status(status)
 
             # Обновляем температуру и тип из NVMe
@@ -413,6 +454,7 @@ class MainWindow(QMainWindow):
                     power_on_hours=s.power_on_hours,
                     waf=s.waf,
                     penalties=[(r, p) for r, p in s.penalties],
+                    attributes=snapshot,
                 )
 
         elif data_type == "none":
@@ -420,6 +462,22 @@ class MainWindow(QMainWindow):
             self._export_action.setEnabled(False)
             self._smart_table.show_message(tr("SMART not supported for this drive", "SMART не поддерживается для этого диска"))
             self._statusbar.showMessage(tr("SMART not available", "SMART недоступен"), 3000)
+
+    @staticmethod
+    def _fmt_prev_date(iso: str) -> str:
+        """ISO timestamp → краткое 'YYYY-MM-DD HH:MM'."""
+        return iso[:16].replace("T", " ") if iso else ""
+
+    def _on_trend_summary(self, text: str, is_degradation: bool):
+        """Баннер тренда: красный при росте дефектных атрибутов, скрыт иначе.
+        Стабильное состояние уходит в статусбар, чтобы не отвлекать."""
+        if is_degradation and text:
+            self._trend_banner.setText("⚠ " + text)
+            self._trend_banner.show()
+        else:
+            self._trend_banner.hide()
+            if text:
+                self._statusbar.showMessage(text, 4000)
 
     def _on_attr_description(self, html: str):
         """Обновить панель описания атрибута."""

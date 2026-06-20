@@ -26,11 +26,39 @@ _STATUS_TEXT_COLORS = {
     HealthLevel.UNKNOWN:  QColor(88, 91, 112),
 }
 
+# ATA-атрибуты, для которых РОСТ raw-значения = деградация (дефектные счётчики).
+# Используется для подсветки тренда и баннера тревоги. Консервативный набор —
+# только явные счётчики дефектов/ошибок (не POH/host-writes, которые растут штатно).
+_DEGRADE_ON_GROWTH = {
+    5,    # Reallocated Sectors Count
+    171,  # SSD Program Fail Count
+    172,  # SSD Erase Fail Count
+    181,  # Program Fail Count (total)
+    182,  # Erase Fail Count (total)
+    183,  # Runtime Bad Block
+    184,  # End-to-End Error
+    187,  # Reported Uncorrectable Errors
+    188,  # Command Timeout
+    196,  # Reallocation Event Count
+    197,  # Current Pending Sector Count
+    198,  # Offline Uncorrectable
+    199,  # UDMA CRC Error Count
+    200,  # Multi-Zone Error Rate / Write Error Rate
+    201,  # Soft Read Error Rate
+}
+
+# Цвета колонки Trend
+_TREND_GROW_BAD = QColor(243, 139, 168)   # red — дефектный атрибут вырос
+_TREND_IMPROVED = QColor(166, 227, 161)   # green — дефектный упал (улучшение)
+_TREND_CHANGED = QColor(137, 180, 250)    # blue — нейтральное изменение
+_TREND_STABLE = QColor(88, 91, 112)       # grey — без изменений / нет данных
+
 
 class SmartTableWidget(QTableWidget):
     """Таблица SMART-атрибутов для ATA-дисков и NVMe health info."""
 
     description_changed = Signal(str)  # HTML-описание выбранного атрибута
+    trend_summary = Signal(str, bool)  # (текст сводки тренда, is_degradation)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,7 +78,7 @@ class SmartTableWidget(QTableWidget):
         на случай если Stretch не пересчитался реактивно)."""
         super().resizeEvent(event)
         cols = self.columnCount()
-        if cols == 7:
+        if cols == 8:
             self._apply_ata_column_widths()
         elif cols == 3:
             self._apply_nvme_column_widths()
@@ -66,19 +94,26 @@ class SmartTableWidget(QTableWidget):
         self.description_changed.emit("")
 
     def set_ata_attributes(self, attributes: list[SmartAttribute],
-                          model: str = "", firmware: str = ""):
-        """Заполнить таблицу ATA SMART-атрибутами."""
+                          model: str = "", firmware: str = "",
+                          previous: dict = None, prev_date: str = ""):
+        """Заполнить таблицу ATA SMART-атрибутами.
+
+        previous — снимок {str(id): raw} с прошлого чтения (для trend-колонки);
+        prev_date — отформатированная дата того снимка (для сводки/баннера).
+        """
         from ..data.vendor_profiles import (match_profile, get_decoded_tooltip,
-                                            get_attribute_override)
+                                            get_attribute_override, decode_raw)
         _vp = match_profile(model, firmware)
         self.setSortingEnabled(False)
         self.clear()
 
         columns = ["ID", tr("Attribute", "Атрибут"), tr("Current", "Текущ"), tr("Worst", "Худш"), tr("Threshold", "Порог"),
-                    tr("Raw Value", "Raw значение"), tr("Status", "Статус")]
+                    tr("Raw Value", "Raw значение"), tr("Trend", "Тренд"), tr("Status", "Статус")]
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
         self.setRowCount(len(attributes))
+
+        degradations = []  # для баннера: (name, прирост) дефектных атрибутов
 
         for row, attr in enumerate(attributes):
             # ID
@@ -141,6 +176,38 @@ class SmartTableWidget(QTableWidget):
                 tip += f"\n{dec_tip}"
             raw_item.setToolTip(tip)
 
+            # Trend — дельта raw-значения относительно прошлого снимка
+            trend_item = QTableWidgetItem()
+            trend_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            prev_raw = previous.get(str(attr.id)) if previous else None
+            is_defect = attr.id in _DEGRADE_ON_GROWTH
+            if prev_raw is None:
+                trend_item.setText("—")
+                trend_item.setForeground(QBrush(_TREND_STABLE))
+            else:
+                # Сравниваем ДЕКОДИРОВАННЫЕ значения: на SandForce и др. дефектные
+                # счётчики (5/196/197/198/201) packed — высокие биты несут другое,
+                # и diff по сырому raw дал бы мусорную дельту и ложную деградацию.
+                delta = (decode_raw(_vp, attr.id, attr.raw_value)
+                         - decode_raw(_vp, attr.id, prev_raw))
+                if delta > 0:
+                    trend_item.setText(f"+{delta:,} ↑")
+                    if is_defect:
+                        trend_item.setForeground(QBrush(_TREND_GROW_BAD))
+                        degradations.append((attr.name, delta))
+                    else:
+                        trend_item.setForeground(QBrush(_TREND_CHANGED))
+                elif delta < 0:
+                    trend_item.setText(f"{delta:,} ↓")
+                    trend_item.setForeground(
+                        QBrush(_TREND_IMPROVED if is_defect else _TREND_CHANGED))
+                else:
+                    trend_item.setText("=")
+                    trend_item.setForeground(QBrush(_TREND_STABLE))
+            trend_item.setToolTip(tr(f"Previous: {prev_raw}", f"Было: {prev_raw}")
+                                  if prev_raw is not None else
+                                  tr("No previous snapshot", "Нет прошлого снимка"))
+
             # Status
             status_text = attr.health_level.value.upper()
             status_item = QTableWidgetItem(status_text)
@@ -155,7 +222,8 @@ class SmartTableWidget(QTableWidget):
             self.setItem(row, 3, worst_item)
             self.setItem(row, 4, thresh_item)
             self.setItem(row, 5, raw_item)
-            self.setItem(row, 6, status_item)
+            self.setItem(row, 6, trend_item)
+            self.setItem(row, 7, status_item)
 
             # Цвет фона строки
             row_color = _ROW_COLORS.get(attr.health_level, QColor(0, 0, 0, 0))
@@ -173,20 +241,45 @@ class SmartTableWidget(QTableWidget):
         self._apply_ata_column_widths()
         QTimer.singleShot(0, self._apply_ata_column_widths)
 
+        self._emit_trend(previous, prev_date, degradations)
+
+    def _emit_trend(self, previous, prev_date, degradations):
+        """Сводка тренда для баннера в main_window."""
+        if not previous:
+            self.trend_summary.emit("", False)  # нет истории — баннер скрыт
+            return
+        since = f" ({prev_date})" if prev_date else ""
+        if degradations:
+            top = sorted(degradations, key=lambda d: d[1], reverse=True)[:5]
+            parts = ", ".join(f"{name} +{delta:,}" for name, delta in top)
+            self.trend_summary.emit(
+                tr(f"Degradation since last check{since}: {parts}",
+                   f"Деградация с прошлой проверки{since}: {parts}"), True)
+        else:
+            self.trend_summary.emit(
+                tr(f"Stable since last check{since}",
+                   f"Стабильно с прошлой проверки{since}"), False)
+
     def _apply_ata_column_widths(self):
         """Колонка 'Атрибут' (1) = Stretch (на всю ширину), ID = Fixed 50,
-        числовые/статус — по содержимому."""
-        if self.columnCount() < 7:
+        числовые/тренд/статус — по содержимому."""
+        if self.columnCount() < 8:
             return
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.setColumnWidth(0, 50)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for col in range(2, 7):
+        for col in range(2, 8):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
-    def set_nvme_health(self, info: NvmeHealthInfo, status: HealthStatus):
-        """Заполнить таблицу данными NVMe Health Info."""
+    def set_nvme_health(self, info: NvmeHealthInfo, status: HealthStatus,
+                        previous: dict = None, prev_date: str = ""):
+        """Заполнить таблицу данными NVMe Health Info.
+
+        previous — снимок {field: value} с прошлого чтения; тренд для NVMe
+        отдаётся баннером (media_errors↑ / available_spare↓ / critical_warning),
+        без отдельной колонки (поля разнородные).
+        """
         self.setSortingEnabled(False)
         self.clear()
 
@@ -340,6 +433,31 @@ class SmartTableWidget(QTableWidget):
         self._apply_nvme_column_widths()
         QTimer.singleShot(0, self._apply_nvme_column_widths)
 
+        # Trend NVMe — сводка по ключевым полям (баннер в main_window)
+        degr = []
+        if previous:
+            pm = previous.get("media_errors")
+            if pm is not None and info.media_errors > pm:
+                degr.append(tr(f"Media errors +{info.media_errors - pm}",
+                               f"Ошибки носителя +{info.media_errors - pm}"))
+            psp = previous.get("available_spare")
+            if psp is not None and not _wmi and info.available_spare < psp:
+                degr.append(tr(f"Spare {psp}→{info.available_spare}%",
+                               f"Резерв {psp}→{info.available_spare}%"))
+        if info.critical_warning and not _wmi:
+            degr.append(tr("Critical Warning set", "Установлен Critical Warning"))
+        since = f" ({prev_date})" if prev_date else ""
+        if degr:
+            self.trend_summary.emit(
+                tr(f"Degradation since last check{since}: " + ", ".join(degr),
+                   f"Деградация с прошлой проверки{since}: " + ", ".join(degr)), True)
+        elif previous:
+            self.trend_summary.emit(
+                tr(f"Stable since last check{since}",
+                   f"Стабильно с прошлой проверки{since}"), False)
+        else:
+            self.trend_summary.emit("", False)
+
     def _apply_nvme_column_widths(self):
         """Параметр (0) = Stretch на всю ширину; Значение/Статус по контенту."""
         if self.columnCount() != 3:
@@ -352,6 +470,7 @@ class SmartTableWidget(QTableWidget):
     def show_message(self, message: str):
         """Показать сообщение вместо данных (напр. 'SMART not supported')."""
         self.description_changed.emit("")
+        self.trend_summary.emit("", False)  # скрыть trend-баннер
         self.setSortingEnabled(False)
         self.clear()
         self.setColumnCount(1)

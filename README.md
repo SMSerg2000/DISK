@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v2.6.0
+# DISK Diagnostic Tool v2.7.0
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -26,6 +26,7 @@
 - **OEM heuristics** — NVMe/SATA detection behind Intel RST/VMD drivers (bus_type=Unknown)
 - **Real USB enclosure model** — via ATA IDENTIFY over SAT (instead of "Mass Storage Device")
 - **Critical attributes** highlighted in blue
+- **SMART trend** — per-attribute change since the last check (**Trend** column with ↑/↓), plus a degradation banner when defect counters grow (Reallocated/Pending/Uncorrectable/CRC; NVMe media-errors / spare drop). Snapshots in SQLite
 - **Bilingual attribute names** — English and Russian
 - **Export** — SMART (Ctrl+S), Benchmark (Ctrl+B), JSON (Ctrl+J)
 
@@ -150,7 +151,8 @@ disk_diag/
 - WMI fallback (behind OEM Intel RST/VMD drivers) provides partial NVMe data only; health is reported as `UNKNOWN` rather than a false `GOOD`.
 - Virtual disks expose no physical SMART data by design.
 - Self-tests run via direct SATA/NVMe and USB-SATA bridges; USB-NVMe bridges generally cannot start one (reported honestly).
-- SMART/NVMe error logs and SMART trend history are not yet implemented.
+- Trend history compares against the previous snapshot of the **same** disk (by serial); the first reading has no baseline yet.
+- SMART/NVMe error logs are not yet implemented.
 
 ---
 
@@ -158,7 +160,8 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **2.6.0** | SMART/NVMe **self-tests**: Short/Extended, live progress, abort, history log (ATA + NVMe + USB-SATA); non-destructive, runs in drive firmware |
+| **2.7.0** | SMART **trend history**: per-attribute Δ since last check (Trend column) + degradation alert when defect counters grow (Reallocated/Pending/CRC, NVMe media-errors / spare drop); SQLite snapshots, revived the previously write-only history |
+| 2.6.0 | SMART/NVMe **self-tests**: Short/Extended, live progress, abort, history log (ATA + NVMe + USB-SATA); non-destructive, runs in drive firmware |
 | 2.5.0 | "Honest & Safe": typed confirmation (type serial / `DESTROY PHYSICALDRIVE<N>`) for all GUI write ops, SSD-aware surface-healing warnings, honest safety wording, Known Limitations section, system-disk gate extended to Erase/Refresh, PhysicalDrive scan 32→64 |
 | 2.4.x | Per-vendor attribute name override, SMART-table column-width fix (Stretch), maximized window, false "Wear 100%" guard (Kingston/SM2259) |
 | 2.3.x | Audit & safety batch: fail-closed volume lock, full MBR/GPT protection in all write phases, CLI confirmation + TOCTOU, ScsiStatus checks for USB bridges, profile separation, QD1 baselines, EN docs |
