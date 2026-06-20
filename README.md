@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v2.5.0
+# DISK Diagnostic Tool v2.6.0
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -59,6 +59,14 @@ Destructive (write — opt-in via Standard/Full/Stress profile, **destroys data*
 - **Block map** — real-time color grid, 30fps
 - **Volume lock/dismount** — automatic before write operations
 
+### Self-test (SMART / NVMe)
+- **Short / Extended** — commands the drive to run its built-in self-diagnostic (ATA SMART `EXECUTE OFFLINE` / NVMe Device Self-test)
+- **Non-destructive** — the drive checks itself; user data is untouched
+- **Live progress** — polled every few seconds, abortable anytime
+- **History log** — past results read from the drive (test type, status, power-on hours, first error LBA)
+- **Runs in firmware** — closing the app does not stop a running test (the drive keeps going)
+- **ATA + NVMe + USB-SATA** — direct SATA/NVMe and USB-SATA bridges; USB-NVMe bridges report honestly when unsupported
+
 ### Safety
 - **Read-only by default** — the default diagnostic path (SMART, read benchmarks, Ignore scan) never writes to the disk
 - **Raw write operations are destructive** — any benchmark or surface mode that writes to `PhysicalDrive` **overwrites existing data and cannot be undone**
@@ -112,7 +120,8 @@ disk_diag/
 │   ├── drive_enumerator.py # Drive enumeration + interface heuristics
 │   ├── health_assessor.py  # Health Score (0-100), TBW, WAF, false-positive guards
 │   ├── benchmark.py        # 8 benchmark tests + temperature monitoring + MBR protection
-│   └── surface_scan.py     # Surface scan (Ignore/Erase/Refresh/Write)
+│   ├── surface_scan.py     # Surface scan (Ignore/Erase/Refresh/Write)
+│   └── self_test.py        # SMART/NVMe self-test (short/extended, progress, log)
 ├── data/
 │   ├── smart_db.py         # 80+ SMART attributes (EN/RU)
 │   ├── vendor_profiles.py  # Vendor decoder + name override
@@ -122,6 +131,7 @@ disk_diag/
 │   ├── main_window.py      # Main window, menus, export
 │   ├── benchmark_panel.py  # 7 cards + 4 chart tabs
 │   ├── surface_panel.py    # Block map + stats + bad sector list
+│   ├── selftest_panel.py   # Self-test launch + progress + history log
 │   └── ...                 # info_panel, smart_table, health_indicator, theme
 ├── i18n.py                 # Localization: tr("en", "ru")
 └── resources/app.ico       # Application icon
@@ -139,7 +149,8 @@ disk_diag/
 - TBW rating is **estimated** (≈600 TBW/TB heuristic) unless a vendor endurance profile is available — QLC/enterprise drives differ widely.
 - WMI fallback (behind OEM Intel RST/VMD drivers) provides partial NVMe data only; health is reported as `UNKNOWN` rather than a false `GOOD`.
 - Virtual disks expose no physical SMART data by design.
-- Self-tests (SMART short/extended, error logs) and SMART trend history are not yet implemented.
+- Self-tests run via direct SATA/NVMe and USB-SATA bridges; USB-NVMe bridges generally cannot start one (reported honestly).
+- SMART/NVMe error logs and SMART trend history are not yet implemented.
 
 ---
 
@@ -147,7 +158,8 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **2.5.0** | "Honest & Safe": typed confirmation (type serial / `DESTROY PHYSICALDRIVE<N>`) for all GUI write ops, SSD-aware surface-healing warnings, honest safety wording, Known Limitations section, system-disk gate extended to Erase/Refresh, PhysicalDrive scan 32→64 |
+| **2.6.0** | SMART/NVMe **self-tests**: Short/Extended, live progress, abort, history log (ATA + NVMe + USB-SATA); non-destructive, runs in drive firmware |
+| 2.5.0 | "Honest & Safe": typed confirmation (type serial / `DESTROY PHYSICALDRIVE<N>`) for all GUI write ops, SSD-aware surface-healing warnings, honest safety wording, Known Limitations section, system-disk gate extended to Erase/Refresh, PhysicalDrive scan 32→64 |
 | 2.4.x | Per-vendor attribute name override, SMART-table column-width fix (Stretch), maximized window, false "Wear 100%" guard (Kingston/SM2259) |
 | 2.3.x | Audit & safety batch: fail-closed volume lock, full MBR/GPT protection in all write phases, CLI confirmation + TOCTOU, ScsiStatus checks for USB bridges, profile separation, QD1 baselines, EN docs |
 | 2.2.x | Virtual disks (hypervisor detection), real USB enclosure model via SAT IDENTIFY, OEM NVMe heuristic, new SMART attributes |

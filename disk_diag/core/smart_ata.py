@@ -73,12 +73,17 @@ _MAX_ATTRIBUTES = 30
 _ATTR_DATA_OFFSET = 2
 
 
-def _build_smart_command(feature: int, buffer_size: int = 512) -> SENDCMDINPARAMS:
+def _build_smart_command(feature: int, buffer_size: int = 512,
+                         lba_low: int = 1) -> SENDCMDINPARAMS:
     """Построить SENDCMDINPARAMS для SMART-команды.
 
     bDriveNumber всегда 0: для SATA каждый диск открывается через свой
     PhysicalDriveN handle, выбор устройства — по handle, а не по номеру.
     Поле bDriveNumber — легаси от IDE master/slave, на SATA игнорируется.
+
+    lba_low (bSectorNumberReg): для READ ATTRIBUTES/THRESHOLDS игнорируется
+    (дефолт 1). Для EXECUTE OFFLINE здесь код self-test (0x01/0x02/0x7F),
+    для READ LOG — адрес лога (0x06 = self-test log).
     """
     params = SENDCMDINPARAMS()
     params.cBufferSize = buffer_size
@@ -86,7 +91,7 @@ def _build_smart_command(feature: int, buffer_size: int = 512) -> SENDCMDINPARAM
 
     params.irDriveRegs.bFeaturesReg = feature
     params.irDriveRegs.bSectorCountReg = 1
-    params.irDriveRegs.bSectorNumberReg = 1
+    params.irDriveRegs.bSectorNumberReg = lba_low
     params.irDriveRegs.bCylLowReg = SMART_CYL_LOW
     params.irDriveRegs.bCylHighReg = SMART_CYL_HI
     params.irDriveRegs.bDriveHeadReg = 0xA0  # Master (единственный вариант для SATA)
@@ -180,7 +185,8 @@ def _parse_thresholds(data: bytes) -> dict[int, int]:
     return thresholds
 
 
-def _sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True) -> bytes:
+def _sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True,
+                       lba_low: int = 0) -> bytes:
     """Отправить SMART-команду через ATA Pass-Through (для USB-SATA мостов).
 
     Используется IOCTL_ATA_PASS_THROUGH вместо legacy SMART IOCTL.
@@ -190,6 +196,8 @@ def _sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True)
         handle: Открытый DeviceHandle
         feature: SMART sub-command (SMART_READ_ATTRIBUTES и т.д.)
         data_in: True если ожидаем 512 байт данных в ответ
+        lba_low: значение LBA Low (self-test код для EXECUTE OFFLINE,
+            адрес лога для READ LOG; 0 для обычных read-команд)
 
     Returns:
         512 байт SMART-данных (или пустой bytes для команд без данных)
@@ -226,7 +234,7 @@ def _sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True)
     ctf_offset = ATA_PASS_THROUGH_EX.CurrentTaskFile.offset
     buf[ctf_offset + 0] = feature          # Features (SMART sub-command)
     buf[ctf_offset + 1] = 1                # Sector Count
-    buf[ctf_offset + 2] = 0                # LBA Low
+    buf[ctf_offset + 2] = lba_low          # LBA Low (self-test код / адрес лога)
     buf[ctf_offset + 3] = SMART_CYL_LOW    # LBA Mid = 0x4F
     buf[ctf_offset + 4] = SMART_CYL_HI     # LBA High = 0xC2
     buf[ctf_offset + 5] = 0xA0             # Device/Head
@@ -239,12 +247,15 @@ def _sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True)
     return b""
 
 
-def _scsi_sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True) -> bytes:
+def _scsi_sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = True,
+                            lba_low: int = 0) -> bytes:
     """Отправить SMART-команду через SCSI Pass-Through с SAT CDB.
 
     Использует ATA Pass-Through (16) CDB (opcode 0x85) поверх
     IOCTL_SCSI_PASS_THROUGH. Работает с большинством USB-SATA мостов,
     включая те, что не поддерживают IOCTL_ATA_PASS_THROUGH.
+
+    lba_low: значение LBA Low (self-test код / адрес лога; 0 для read-команд).
     """
     header_size = ctypes.sizeof(SCSI_PASS_THROUGH)
     sense_size = 32
@@ -297,7 +308,7 @@ def _scsi_sat_smart_command(handle: DeviceHandle, feature: int, data_in: bool = 
         buf[cdb_offset + 2] = 0x20      # ck_cond = 1
     buf[cdb_offset + 4] = feature        # Features
     buf[cdb_offset + 6] = 1              # Sector Count
-    buf[cdb_offset + 8] = 0              # LBA Low
+    buf[cdb_offset + 8] = lba_low        # LBA Low (self-test код / адрес лога)
     buf[cdb_offset + 10] = SMART_CYL_LOW # LBA Mid = 0x4F
     buf[cdb_offset + 12] = SMART_CYL_HI  # LBA High = 0xC2
     buf[cdb_offset + 13] = 0xA0          # Device

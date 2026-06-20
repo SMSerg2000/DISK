@@ -87,6 +87,40 @@ class NvmeHealthInfo:
     wmi_fallback: bool = False  # True = ограниченные данные через WMI
 
 
+class SelfTestType(Enum):
+    SHORT = "short"
+    EXTENDED = "extended"
+    ABORT = "abort"
+
+
+@dataclass
+class SelfTestState:
+    """Текущее состояние выполнения self-test (для polling раз в N секунд)."""
+    running: bool = False
+    percent: int = -1          # 0-100 выполнено, -1 = неизвестно
+    message: str = ""
+
+
+@dataclass
+class SelfTestEntry:
+    """Одна запись журнала самопроверок диска (из лога устройства)."""
+    test_description: str       # "Short"/"Extended"/"Conveyance"/hex-код
+    status_code: int            # сырой код статуса
+    status_text: str            # человекочитаемый статус
+    passed: bool                # завершён без ошибки
+    lifetime_hours: int = -1    # наработка на момент теста (-1 = нет)
+    failing_lba: int = -1       # LBA первой ошибки (-1 = нет/не применимо)
+
+
+@dataclass
+class SelfTestLog:
+    """Журнал самопроверок + текущее состояние выполнения."""
+    entries: list = field(default_factory=list)   # list[SelfTestEntry], новейшие первыми
+    state: SelfTestState = field(default_factory=SelfTestState)
+    supported: bool = True
+    note: str = ""              # пояснение, если supported=False (напр. USB-NVMe мост)
+
+
 @dataclass
 class HealthStatus:
     level: HealthLevel

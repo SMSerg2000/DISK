@@ -29,6 +29,7 @@ from .smart_table import SmartTableWidget
 from .health_indicator import HealthIndicator
 from .benchmark_panel import BenchmarkPanel
 from .surface_panel import SurfaceScanPanel
+from .selftest_panel import SelfTestPanel
 
 logger = logging.getLogger(__name__)
 
@@ -199,9 +200,11 @@ class MainWindow(QMainWindow):
 
         self._benchmark_panel = BenchmarkPanel()
         self._surface_panel = SurfaceScanPanel()
+        self._selftest_panel = SelfTestPanel()
         self._tabs.addTab(smart_tab, "SMART")
         self._tabs.addTab(self._benchmark_panel, tr("Benchmark", "Тесты"))
         self._tabs.addTab(self._surface_panel, tr("Surface Scan", "Поверхность"))
+        self._tabs.addTab(self._selftest_panel, tr("Self-test", "Самотест"))
         main_layout.addWidget(self._tabs, stretch=1)
 
     def _setup_statusbar(self):
@@ -230,6 +233,7 @@ class MainWindow(QMainWindow):
         self._smart_table.show_message(tr("Scanning...", "Поиск..."))
         self._benchmark_panel.clear()
         self._surface_panel.clear()
+        self._selftest_panel.clear()
 
         try:
             self._drives = enumerate_drives()
@@ -259,6 +263,9 @@ class MainWindow(QMainWindow):
         self._surface_panel.set_drive(drive.drive_number, drive.capacity_bytes,
                                       drive.model, drive.serial_number,
                                       drive.drive_type.value, drive.interface_type.value)
+        self._selftest_panel.set_drive(drive.drive_number, drive.capacity_bytes,
+                                       drive.interface_type.value, drive.model,
+                                       drive.serial_number)
 
         # Виртуальные диски (VirtIO, Hyper-V, VMware, ...) не имеют физического
         # SMART — это абстракция гипервизора над хранилищем. Показываем
@@ -808,9 +815,12 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
-        # stop() панелей шлёт cancel() и ждёт до 3+15 секунд завершения потока
+        # stop() панелей шлёт cancel() и ждёт до 3+15 секунд завершения потока.
+        # Self-test не спрашивает подтверждения (тест идёт в firmware диска —
+        # закрытие лишь прекращает опрос), но поток опроса надо чисто завершить.
         self._benchmark_panel.stop()
         self._surface_panel.stop()
+        self._selftest_panel.stop()
         if self._worker_thread is not None and self._worker_thread.isRunning():
             self._worker_thread.quit()
             self._worker_thread.wait(2000)

@@ -49,8 +49,20 @@ ATA_ID_CMD = 0xEC
 # SMART sub-commands (bFeaturesReg)
 SMART_READ_ATTRIBUTES = 0xD0
 SMART_READ_THRESHOLDS = 0xD1
-SMART_ENABLE_OPERATIONS = 0xD8
+SMART_EXECUTE_OFFLINE = 0xD4  # SMART EXECUTE OFFLINE IMMEDIATE — запуск self-test
 SMART_READ_LOG = 0xD5
+SMART_ENABLE_OPERATIONS = 0xD8
+
+# SMART log addresses (кладутся в LBA Low при SMART_READ_LOG 0xD5)
+SMART_LOG_ADDR_SELF_TEST = 0x06  # SMART self-test log (512 байт, до 21 записи)
+
+# Self-test subcommands (кладутся в LBA Low при SMART_EXECUTE_OFFLINE 0xD4)
+SMART_SELFTEST_SHORT = 0x01      # короткий (~1-2 мин)
+SMART_SELFTEST_EXTENDED = 0x02   # расширенный (минуты-часы)
+SMART_SELFTEST_ABORT = 0x7F      # прервать текущий self-test
+
+# Байт статуса выполнения self-test в SMART READ DATA (0xD0), offset 363
+SMART_SELFTEST_STATUS_OFFSET = 363
 
 # SMART cylinder magic values
 SMART_CYL_LOW = 0x4F
@@ -78,7 +90,21 @@ NVMeDataTypeLogPage = 2
 NVMeDataTypeFeature = 3
 
 # --- NVMe log page IDs ---
+NVME_LOG_PAGE_ERROR_INFO = 0x01
 NVME_LOG_PAGE_HEALTH_INFO = 0x02
+NVME_LOG_PAGE_SELF_TEST = 0x06   # Device Self-test log (564 байта, до 20 записей)
+
+# --- NVMe Admin opcodes ---
+NVME_ADMIN_DEVICE_SELF_TEST = 0x14  # запуск/отмена self-test (STC в CDW10)
+
+# NVMe Device Self-test codes (STC, CDW10 bits 3:0)
+NVME_SELFTEST_SHORT = 0x1
+NVME_SELFTEST_EXTENDED = 0x2
+NVME_SELFTEST_ABORT = 0xF
+
+# IOCTL_STORAGE_PROTOCOL_COMMAND — прямая NVMe Admin команда
+# CTL_CODE(FILE_DEVICE_MASS_STORAGE=0x2D, 0x04F0, METHOD_BUFFERED=0, FILE_READ_WRITE_ACCESS=3)
+IOCTL_STORAGE_PROTOCOL_COMMAND = 0x002DD3C0
 
 # --- STORAGE_BUS_TYPE ---
 BUS_TYPE_NAMES = {
