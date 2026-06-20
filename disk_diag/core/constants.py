@@ -118,8 +118,10 @@ IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
 # CTL_CODE(FILE_DEVICE_MASS_STORAGE=0x2D, 0x0450, METHOD_BUFFERED, FILE_READ_ACCESS=1)
 IOCTL_STORAGE_READ_CAPACITY = 0x002D5140
 
-# Максимальное количество физических дисков для сканирования
-MAX_PHYSICAL_DRIVES = 32
+# Максимальное количество физических дисков для сканирования.
+# 64 покрывает серверы/HBA/RAID/USB-доки; перебор PhysicalDrive0..63
+# дёшев (отсутствующие открываются мгновенно с ERROR_FILE_NOT_FOUND).
+MAX_PHYSICAL_DRIVES = 64
 
 # --- Benchmark / Direct I/O ---
 FILE_FLAG_NO_BUFFERING = 0x20000000

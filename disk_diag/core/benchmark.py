@@ -41,14 +41,19 @@ def _read_temperature(drive_number: int, interface_type: str = "") -> int | None
 class BenchmarkEngine:
     """Движок бенчмарка диска.
 
-    Тесты (чтение):
+    Тесты (чтение, безопасные — выполняются всегда):
         1. Sequential Read — последовательное чтение блоками 1 MB
         2. Random 4K Read — случайное чтение блоками 4 KB
         3. Full Drive Read Sweep — скорость vs позиция (график)
-    Тесты (запись, деструктивные):
+    Тесты (запись, ДЕСТРУКТИВНЫЕ — только при include_write=True):
         4. Sequential Write — последовательная запись 512 MB
         5. Random 4K Write — случайная запись 4 KB
-        6. SLC Cache Test — непрерывная запись до cliff
+        6. Mixed I/O 70/30 — смешанная нагрузка чтение/запись
+        7. Write-Read-Verify — запись → чтение → сверка дайджестов (MD5)
+        8. SLC Cache Test — непрерывная запись до cliff (full/stress)
+
+    Все write-фазы стартуют за первым 1 GiB (MBR_PROTECT_BYTES) и требуют
+    успешной блокировки всех томов (fail-closed) перед записью.
     """
 
     SEQUENTIAL_BLOCK = 1024 * 1024           # 1 MB

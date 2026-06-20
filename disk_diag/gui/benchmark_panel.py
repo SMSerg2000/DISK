@@ -11,6 +11,7 @@ from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen
 
 from ..core.benchmark import BenchmarkEngine
 from ..core.models import BenchmarkResult
+from .confirm_dialog import confirm_destructive
 from ..i18n import tr
 
 # noinspection PyUnresolvedReferences — used in _on_finished for SLC_MAX_GB
@@ -430,6 +431,7 @@ class BenchmarkPanel(QWidget):
         self._capacity_bytes: int = 0
         self._interface_type: str = ""
         self._model: str = ""
+        self._serial: str = ""
         self._last_result: BenchmarkResult | None = None
         self._worker: _BenchmarkWorker | None = None
         self._thread: QThread | None = None
@@ -461,8 +463,8 @@ class BenchmarkPanel(QWidget):
         self._profile_combo.setMinimumWidth(140)
         self._profile_combo.addItem(tr("Quick (read-only)", "Быстрый (чтение)"), "quick")
         self._profile_combo.addItem(tr("Standard (+ write)", "Стандарт (+ запись)"), "standard")
-        self._profile_combo.addItem(tr("Full (all tests)", "Полный (все тесты)"), "full")
-        self._profile_combo.addItem(tr("Stress (long)", "Стресс (длительный)"), "stress")
+        self._profile_combo.addItem(tr("Full (+ write, all)", "Полный (+ запись, все)"), "full")
+        self._profile_combo.addItem(tr("Stress (+ write, long)", "Стресс (+ запись, длит.)"), "stress")
         self._profile_combo.setToolTip(
             tr("Quick — read-only, safe, ~30 sec\n"
                "Standard — + seq/random/mixed/verify writes (no SLC), ~2 min\n"
@@ -525,13 +527,14 @@ class BenchmarkPanel(QWidget):
     # --- Public API ---
 
     def set_drive(self, drive_number: int, capacity_bytes: int,
-                  interface_type: str = "", model: str = ""):
+                  interface_type: str = "", model: str = "", serial: str = ""):
         """Установить диск для бенчмарка."""
         self.stop()
         self._drive_number = drive_number
         self._interface_type = interface_type
         self._capacity_bytes = capacity_bytes
         self._model = model
+        self._serial = serial
         self._btn_start.setEnabled(True)
         self._status.setText(tr("Ready", "Готов"))
         self._status.setStyleSheet("color: #a6adc8;")
@@ -605,61 +608,45 @@ class BenchmarkPanel(QWidget):
             QMessageBox.information(self, conf, cond_text)
 
         if include_write:
-            size_gb = self._capacity_bytes / (1024 ** 3)
             # Точный план записи по выбранному профилю
             include_slc = profile in ("full", "stress")
             slc_gb = 100 if profile == "stress" else (50 if profile == "full" else 0)
             verify_mb = 1024 if profile == "stress" else 256
             slc_line_en = f"SLC Cache: up to {slc_gb} GB\n" if include_slc else ""
             slc_line_ru = f"SLC Cache: запись до {slc_gb} GB\n" if include_slc else ""
-            reply = QMessageBox.warning(
-                self, tr("Benchmark — Write Tests", "Бенчмарк — Тесты записи"),
-                tr(
-                    f"⚠️ Write tests will DESTROY ALL DATA on the disk!\n\n"
-                    f"Disk: {self._model.strip()} ({size_gb:.1f} GB)\n"
-                    f"Profile: {profile}\n\n"
-                    f"Sequential Write: 512 MB (skipping first 1 GB to protect MBR/GPT)\n"
-                    f"Random 4K Write + Mixed I/O\n"
-                    f"Write-Read-Verify: {verify_mb} MB\n"
-                    f"{slc_line_en}\n"
-                    f"ARE YOU SURE?",
-                    f"⚠️ Тесты записи УНИЧТОЖАТ ВСЕ ДАННЫЕ на диске!\n\n"
-                    f"Диск: {self._model.strip()} ({size_gb:.1f} GB)\n"
-                    f"Профиль: {profile}\n\n"
-                    f"Sequential Write: 512 MB (первый 1 GB пропускается для защиты MBR/GPT)\n"
-                    f"Random 4K Write + Mixed I/O\n"
-                    f"Write-Read-Verify: {verify_mb} MB\n"
-                    f"{slc_line_ru}\n"
-                    f"ВЫ УВЕРЕНЫ?",
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
 
-            # Двойная защита для системного диска
             from ..core.winapi import is_system_drive
-            if is_system_drive(self._drive_number):
-                reply2 = QMessageBox.critical(
-                    self, tr("⚠️ SYSTEM DISK!", "⚠️ СИСТЕМНЫЙ ДИСК!"),
-                    tr(
-                        f"THIS IS THE SYSTEM DISK (contains Windows)!\n"
-                        f"Disk: {self._model.strip()}\n\n"
-                        f"Write tests will make the computer unbootable!\n"
-                        f"You will lose ALL programs and data!\n\n"
-                        f"DO YOU REALLY WANT TO CONTINUE?",
-                        f"ЭТО СИСТЕМНЫЙ ДИСК (содержит Windows)!\n"
-                        f"Диск: {self._model.strip()}\n\n"
-                        f"Тесты записи сделают компьютер незагружаемым!\n"
-                        f"Вы потеряете ВСЕ программы и данные!\n\n"
-                        f"ВЫ ДЕЙСТВИТЕЛЬНО ХОТИТЕ ПРОДОЛЖИТЬ?",
-                    ),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply2 != QMessageBox.StandardButton.Yes:
-                    return
+            is_system = is_system_drive(self._drive_number)
+            sys_en = ("\n\n*** THIS IS THE SYSTEM DISK (Windows)! ***\n"
+                      "Writing will make the computer UNBOOTABLE and destroy "
+                      "all programs and data.") if is_system else ""
+            sys_ru = ("\n\n*** ЭТО СИСТЕМНЫЙ ДИСК (Windows)! ***\n"
+                      "Запись сделает компьютер НЕЗАГРУЖАЕМЫМ и уничтожит "
+                      "все программы и данные.") if is_system else ""
+
+            body = tr(
+                f"⚠️ Write tests overwrite raw disk data beyond the first 1 GiB.\n"
+                f"ALL EXISTING DATA on this disk will be DESTROYED.\n\n"
+                f"Sequential Write: 512 MB (first 1 GiB skipped to protect MBR/GPT)\n"
+                f"Random 4K Write + Mixed I/O\n"
+                f"Write-Read-Verify: {verify_mb} MB\n"
+                f"{slc_line_en}"
+                f"Profile: {profile}{sys_en}",
+                f"⚠️ Тесты записи перезаписывают сырые данные диска за первым 1 GiB.\n"
+                f"ВСЕ ДАННЫЕ на этом диске будут УНИЧТОЖЕНЫ.\n\n"
+                f"Sequential Write: 512 MB (первый 1 GiB пропускается для защиты MBR/GPT)\n"
+                f"Random 4K Write + Mixed I/O\n"
+                f"Write-Read-Verify: {verify_mb} MB\n"
+                f"{slc_line_ru}"
+                f"Профиль: {profile}{sys_ru}",
+            )
+            if not confirm_destructive(
+                self, self._drive_number, self._model, self._serial,
+                self._capacity_bytes,
+                tr("Benchmark — Write Tests", "Бенчмарк — Тесты записи"),
+                body, require_phrase=is_system,
+            ):
+                return
 
         self._clear_results()
         self._btn_start.setEnabled(False)

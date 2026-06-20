@@ -254,9 +254,11 @@ class MainWindow(QMainWindow):
         self._info_panel.set_drive_info(drive)
         self._health_indicator.clear()
         self._benchmark_panel.set_drive(drive.drive_number, drive.capacity_bytes,
-                                       drive.interface_type.value, drive.model)
+                                       drive.interface_type.value, drive.model,
+                                       drive.serial_number)
         self._surface_panel.set_drive(drive.drive_number, drive.capacity_bytes,
-                                      drive.model)
+                                      drive.model, drive.serial_number,
+                                      drive.drive_type.value, drive.interface_type.value)
 
         # Виртуальные диски (VirtIO, Hyper-V, VMware, ...) не имеют физического
         # SMART — это абстракция гипервизора над хранилищем. Показываем
@@ -353,6 +355,10 @@ class MainWindow(QMainWindow):
             temp = get_temperature_from_smart(attrs)
             if drive:
                 self._info_panel.set_drive_info(drive, temperature=temp)
+                # Тип уточнён по SMART → surface-панель узнаёт про SSD (для
+                # honest-предупреждения о вреде записи на флеш)
+                self._surface_panel.update_drive_type(
+                    drive.drive_type.value, drive.interface_type.value)
 
             self._statusbar.showMessage(
                 f"SMART: {len(attrs)} attributes loaded — {status.summary}", 5000
@@ -378,6 +384,8 @@ class MainWindow(QMainWindow):
                 self._info_panel.set_drive_info(
                     drive, temperature=health_info.temperature_celsius
                 )
+                self._surface_panel.update_drive_type(
+                    drive.drive_type.value, drive.interface_type.value)
 
             wmi_note = " (WMI fallback — limited data)" if health_info.wmi_fallback else ""
             self._statusbar.showMessage(

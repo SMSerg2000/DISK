@@ -16,7 +16,10 @@ from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer, QRectF
 from PySide6.QtGui import QFont, QPainter, QColor, QPen
 
 from ..core.surface_scan import SurfaceScanEngine, BLOCK_SIZES, DEFAULT_BLOCK_SIZE
-from ..core.models import BlockCategory, ScanMode, SurfaceScanResult
+from ..core.models import (
+    BlockCategory, ScanMode, SurfaceScanResult, DriveType, InterfaceType,
+)
+from .confirm_dialog import confirm_destructive
 from ..i18n import tr
 
 logger = logging.getLogger(__name__)
@@ -374,6 +377,8 @@ class SurfaceScanPanel(QWidget):
         self._worker: _SurfaceScanWorker | None = None
         self._thread: QThread | None = None
         self._model: str = ""
+        self._serial: str = ""
+        self._is_ssd: bool = False
 
         # Для расчёта скорости и ETA
         self._scan_start_time: float = 0.0
@@ -508,12 +513,15 @@ class SurfaceScanPanel(QWidget):
 
     # --- Public API ---
 
-    def set_drive(self, drive_number: int, capacity_bytes: int, model: str = ""):
+    def set_drive(self, drive_number: int, capacity_bytes: int, model: str = "",
+                  serial: str = "", drive_type: str = "", interface_type: str = ""):
         """Установить диск для сканирования."""
         self.stop()
         self._drive_number = drive_number
         self._capacity_bytes = capacity_bytes
         self._model = model
+        self._serial = serial
+        self._is_ssd = self._compute_ssd(drive_type, interface_type)
         self._btn_start.setEnabled(True)
         self._status.setText(tr("Ready", "Готов"))
         self._status.setStyleSheet("color: #a6adc8;")
@@ -524,6 +532,22 @@ class SurfaceScanPanel(QWidget):
         self._from_edit.setText("0")
         self._to_edit.setText(str(max_lba))
         self._update_range_hint()
+
+    @staticmethod
+    def _compute_ssd(drive_type: str, interface_type: str) -> bool:
+        """SSD/NVMe? Используется для honest-предупреждения о вреде записи на флеш."""
+        return (drive_type == DriveType.SSD.value
+                or interface_type == InterfaceType.NVME.value)
+
+    def update_drive_type(self, drive_type: str, interface_type: str):
+        """Уточнить SSD-флаг после чтения SMART.
+
+        При выборе диска SATA-тип ещё UNKNOWN (уточняется по SMART-атрибутам
+        асинхронно). main_window зовёт этот метод, когда тип определён — чтобы
+        SSD-предупреждение surface-режимов сработало и для SATA SSD, а не
+        только для NVMe (который виден по интерфейсу сразу).
+        """
+        self._is_ssd = self._compute_ssd(drive_type, interface_type)
 
     def clear(self):
         """Полный сброс панели."""
@@ -675,38 +699,40 @@ class SurfaceScanPanel(QWidget):
                     "Продолжить?",
                 )
 
-            reply = QMessageBox.warning(
-                self, f"Surface Scan — {mode.value.upper()}",
-                warn_text,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            # SSD/NVMe: «лечение» записью не восстанавливает NAND и лишь тратит ресурс
+            if self._is_ssd:
+                warn_text += tr(
+                    "\n\n— SSD / NVMe detected —\n"
+                    "Write / Erase / Refresh do NOT repair flash memory and only\n"
+                    "consume write endurance. For SSD health use SMART, Media\n"
+                    "Errors and Percentage Used — not surface writes.",
+                    "\n\n— Обнаружен SSD / NVMe —\n"
+                    "Write / Erase / Refresh НЕ лечат флеш-память и лишь тратят\n"
+                    "её ресурс. Для оценки SSD смотри SMART, Media Errors и\n"
+                    "Percentage Used, а не запись по поверхности.",
+                )
 
-            # Двойная защита для системного диска
-            if mode == ScanMode.WRITE:
-                from ..core.winapi import is_system_drive
-                if is_system_drive(self._drive_number):
-                    reply2 = QMessageBox.critical(
-                        self, tr("⚠️ SYSTEM DISK!", "⚠️ СИСТЕМНЫЙ ДИСК!"),
-                        tr(
-                            f"THIS IS THE SYSTEM DISK (contains Windows)!\n"
-                            f"Disk: {self._model.strip()}\n\n"
-                            f"Erasing will make the computer unbootable!\n"
-                            f"You will lose ALL programs and data!\n\n"
-                            f"DO YOU REALLY WANT TO ERASE THE SYSTEM DISK?",
-                            f"ЭТО СИСТЕМНЫЙ ДИСК (содержит Windows)!\n"
-                            f"Диск: {self._model.strip()}\n\n"
-                            f"Стирание сделает компьютер незагружаемым!\n"
-                            f"Вы потеряете ВСЕ программы и данные!\n\n"
-                            f"ВЫ ДЕЙСТВИТЕЛЬНО ХОТИТЕ СТЕРЕТЬ СИСТЕМНЫЙ ДИСК?",
-                        ),
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.No,
-                    )
-                    if reply2 != QMessageBox.StandardButton.Yes:
-                        return
+            # Системный диск — требуем фразу DESTROY (жёстче серийника), и теперь
+            # для Erase/Refresh тоже, не только для полного WRITE (закрыта дыра)
+            from ..core.winapi import is_system_drive
+            is_system = is_system_drive(self._drive_number)
+            if is_system:
+                warn_text += tr(
+                    "\n\n*** THIS IS THE SYSTEM DISK (Windows)! ***\n"
+                    "This will make the computer UNBOOTABLE and destroy all data.",
+                    "\n\n*** ЭТО СИСТЕМНЫЙ ДИСК (Windows)! ***\n"
+                    "Это сделает компьютер НЕЗАГРУЖАЕМЫМ и уничтожит все данные.",
+                )
+
+            # Typed-подтверждение для ЛЮБОГО destructive-режима (раньше был
+            # только клик Yes/No — слабее, чем CLI с вводом серийника)
+            if not confirm_destructive(
+                self, self._drive_number, self._model, self._serial,
+                self._capacity_bytes,
+                f"Surface Scan — {mode.value.upper()}",
+                warn_text, require_phrase=is_system,
+            ):
+                return
 
         self._clear_results()
         self._btn_start.setEnabled(False)

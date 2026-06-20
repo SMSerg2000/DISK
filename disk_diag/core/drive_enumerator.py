@@ -237,7 +237,7 @@ def _check_smart_support(handle: DeviceHandle) -> tuple[bool, bool]:
 
 
 def enumerate_drives() -> list[DriveInfo]:
-    """Сканировать PhysicalDrive0..15 и вернуть список обнаруженных дисков."""
+    """Сканировать PhysicalDrive0..(MAX_PHYSICAL_DRIVES-1) и вернуть список дисков."""
     drives = []
 
     for n in range(MAX_PHYSICAL_DRIVES):

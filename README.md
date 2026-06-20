@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v2.4.5
+# DISK Diagnostic Tool v2.5.0
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -29,14 +29,20 @@
 - **Bilingual attribute names** — English and Russian
 - **Export** — SMART (Ctrl+S), Benchmark (Ctrl+B), JSON (Ctrl+J)
 
-### Benchmark (7 tests)
-- **Sequential Read/Write** — 1 MB blocks, throughput in MB/s
-- **Random 4K Read/Write** — IOPS, latency (avg, P95, P99)
-- **Mixed I/O 70/30** — realistic workload simulation, 30 seconds
-- **Write-Read-Verify** — 256 MB data integrity check (MD5)
-- **SLC Cache Test** — continuous write up to 50 GB, cliff detection
+### Benchmark (8 tests)
+Read-only (safe, always run):
+- **Sequential Read** — 1 MB blocks, throughput in MB/s
+- **Random 4K Read** — IOPS, latency (avg, P95, P99, P99.9)
 - **Full Drive Read Sweep** — 200-point speed vs position sampling
-- **Temperature monitoring** — during all tests
+
+Destructive (write — opt-in via Standard/Full/Stress profile, **destroys data**):
+- **Sequential Write** — 1 MB blocks, starts past the protected 1 GiB
+- **Random 4K Write** — IOPS, latency
+- **Mixed I/O 70/30** — realistic workload simulation
+- **Write-Read-Verify** — 256 MB (1 GB in Stress) data integrity check (MD5)
+- **SLC Cache Test** — continuous write up to 50/100 GB, cliff detection
+
+- **Temperature monitoring** — recorded during all tests
 - **4 chart tabs** — Latency Scatter, Latency Histogram, Drive Sweep, SLC Cache
 - **Direct I/O** — `FILE_FLAG_NO_BUFFERING` + `FILE_FLAG_WRITE_THROUGH`
 - **Export Benchmark** — File → Export Benchmark (Ctrl+B)
@@ -54,11 +60,15 @@
 - **Volume lock/dismount** — automatic before write operations
 
 ### Safety
-- **MBR/GPT/EFI zone protection** — all write tests start past the first 1 GiB (disk stays bootable)
-- **Fail-closed volume locking** — if any volume can't be locked, writing aborts
-- **System drive protection** — double confirmation with disk model
-- **CLI: serial-number confirmation + TOCTOU guard** — re-verifies the disk before writing (in case of USB replug)
-- **Anti-compression** — incompressible random data on every write iteration (honest figures on SandForce, etc.)
+- **Read-only by default** — the default diagnostic path (SMART, read benchmarks, Ignore scan) never writes to the disk
+- **Raw write operations are destructive** — any benchmark or surface mode that writes to `PhysicalDrive` **overwrites existing data and cannot be undone**
+- **MBR/GPT/EFI zone protection** — write tests avoid the first 1 GiB to reduce the risk of destroying partition and boot metadata. This does **not** protect user data beyond that area
+- **Typed confirmation (GUI)** — every write operation (benchmark write profiles, surface Erase/Refresh/Write) requires typing the exact disk serial number; the system disk requires typing `DESTROY PHYSICALDRIVE<N>`
+- **Fail-closed volume locking** — if any volume on the target disk can't be locked and dismounted, the write is aborted
+- **System drive protection** — destructive operations on the Windows disk demand the strongest confirmation by default
+- **CLI: serial-number confirmation + TOCTOU guard** — re-verifies the disk by serial right before writing (in case of USB renumbering)
+- **SSD-aware surface scan** — on SSD/NVMe, write-based "healing" modes warn that they don't repair flash and only consume endurance
+- **Anti-compression** — incompressible random data on every write iteration (reduces cache/controller distortion on SandForce, etc.)
 
 ### Interface
 - **Bilingual UI** — Russian / English (🌐 Language menu)
@@ -119,11 +129,26 @@ disk_diag/
 
 ---
 
+## Known Limitations
+
+- RAID/HBA controllers may hide or virtualize SMART/NVMe health data.
+- USB bridges vary widely; some do not expose SMART/NVMe pass-through at all.
+- Surface Scan is HDD-centric. For SSD/NVMe it is only a coarse LBA-readability check, **not** a NAND-cell test.
+- Write benchmarks and surface write modes operate on raw `PhysicalDrive` and are **destructive** — they overwrite user data beyond the protected 1 GiB.
+- Health Score is a heuristic and does **not** replace vendor diagnostics.
+- TBW rating is **estimated** (≈600 TBW/TB heuristic) unless a vendor endurance profile is available — QLC/enterprise drives differ widely.
+- WMI fallback (behind OEM Intel RST/VMD drivers) provides partial NVMe data only; health is reported as `UNKNOWN` rather than a false `GOOD`.
+- Virtual disks expose no physical SMART data by design.
+- Self-tests (SMART short/extended, error logs) and SMART trend history are not yet implemented.
+
+---
+
 ## Version History
 
 | Version | Changes |
 |---------|---------|
-| **2.4.x** | Per-vendor attribute name override, SMART-table column-width fix (Stretch), maximized window, false "Wear 100%" guard (Kingston/SM2259) |
+| **2.5.0** | "Honest & Safe": typed confirmation (type serial / `DESTROY PHYSICALDRIVE<N>`) for all GUI write ops, SSD-aware surface-healing warnings, honest safety wording, Known Limitations section, system-disk gate extended to Erase/Refresh, PhysicalDrive scan 32→64 |
+| 2.4.x | Per-vendor attribute name override, SMART-table column-width fix (Stretch), maximized window, false "Wear 100%" guard (Kingston/SM2259) |
 | 2.3.x | Audit & safety batch: fail-closed volume lock, full MBR/GPT protection in all write phases, CLI confirmation + TOCTOU, ScsiStatus checks for USB bridges, profile separation, QD1 baselines, EN docs |
 | 2.2.x | Virtual disks (hypervisor detection), real USB enclosure model via SAT IDENTIFY, OEM NVMe heuristic, new SMART attributes |
 | 2.1.0 | Vendor-specific SMART decoder (8 profiles: SandForce, Kingston, Transcend, Intel, Samsung, SanDisk, Crucial/Micron) |
