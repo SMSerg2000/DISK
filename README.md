@@ -7,6 +7,8 @@
 
 🇷🇺 [Документация на русском](README_RU.md)
 
+📖 **[How It Works](docs/HOW_IT_WORKS.md)** — detailed breakdown of the algorithms and internals · [User Guide](docs/USER_GUIDE.md) · [Developer Guide](docs/DEVELOPER_GUIDE.md)
+
 ---
 
 ## Features
@@ -16,12 +18,16 @@
 - **NVMe Health Info** — all 16 standard fields (temperature, spare, wear, media errors, etc.)
 - **USB-SATA** — SMART via SCSI SAT pass-through (ATA PT / SCSI SAT CDB)
 - **USB-NVMe** — vendor bridge pass-through: JMicron JMS583/581, ASMedia ASM2362/2364, Realtek RTL9210/9211/9220
-- **Health Score (0-100)** — weighted formula based on SSD Testing Spec
-- **TBW Calculator** — consumed/rated TBW, daily write rate, remaining life forecast
-- **70+ known ATA attributes** — including Kingston, Samsung, WD, Transcend/Silicon Motion
+- **Health Score (0-100)** — weighted formula with false-positive guards
+- **TBW/WAF Calculator** — consumed/estimated TBW, daily write rate, remaining life forecast
+- **80+ known ATA attributes** — including Kingston, Samsung, WD, Crucial/Micron, Transcend/Silicon Motion
+- **Vendor profiles** — correct packed-raw decoding (SandForce, etc.) + per-vendor name override (e.g. ID 202 on Crucial = remaining life, not Address Mark Errors)
+- **Virtual disk detection** — hypervisor recognition (VirtIO/Hyper-V/VMware/Xen/Parallels/GCE/AWS), honest "SMART not available"
+- **OEM heuristics** — NVMe/SATA detection behind Intel RST/VMD drivers (bus_type=Unknown)
+- **Real USB enclosure model** — via ATA IDENTIFY over SAT (instead of "Mass Storage Device")
 - **Critical attributes** highlighted in blue
 - **Bilingual attribute names** — English and Russian
-- **Export SMART** — File → Export SMART (Ctrl+S)
+- **Export** — SMART (Ctrl+S), Benchmark (Ctrl+B), JSON (Ctrl+J)
 
 ### Benchmark (7 tests)
 - **Sequential Read/Write** — 1 MB blocks, throughput in MB/s
@@ -48,9 +54,11 @@
 - **Volume lock/dismount** — automatic before write operations
 
 ### Safety
+- **MBR/GPT/EFI zone protection** — all write tests start past the first 1 GiB (disk stays bootable)
+- **Fail-closed volume locking** — if any volume can't be locked, writing aborts
 - **System drive protection** — double confirmation with disk model
-- **Destructive warnings** — all write operations require confirmation
-- **Disk model shown** in all warning dialogs
+- **CLI: serial-number confirmation + TOCTOU guard** — re-verifies the disk before writing (in case of USB replug)
+- **Anti-compression** — incompressible random data on every write iteration (honest figures on SandForce, etc.)
 
 ### Interface
 - **Bilingual UI** — Russian / English (🌐 Language menu)
@@ -91,11 +99,14 @@ disk_diag/
 │   ├── smart_ata.py        # ATA SMART: legacy + ATA PT + SCSI SAT
 │   ├── smart_nvme.py       # NVMe Health: 5 fallback methods + WMI
 │   ├── smart_usb_nvme.py   # USB-NVMe: JMicron/ASMedia/Realtek vendor SCSI
-│   ├── health_assessor.py  # Health Score (0-100), TBW, WAF
-│   ├── benchmark.py        # 7 benchmark tests + temperature monitoring
+│   ├── drive_enumerator.py # Drive enumeration + interface heuristics
+│   ├── health_assessor.py  # Health Score (0-100), TBW, WAF, false-positive guards
+│   ├── benchmark.py        # 8 benchmark tests + temperature monitoring + MBR protection
 │   └── surface_scan.py     # Surface scan (Ignore/Erase/Refresh/Write)
 ├── data/
-│   ├── smart_db.py         # 70+ SMART attributes (EN/RU)
+│   ├── smart_db.py         # 80+ SMART attributes (EN/RU)
+│   ├── vendor_profiles.py  # Vendor decoder + name override
+│   ├── baselines.py        # Performance baselines (QD1 vs QD32)
 │   └── nvme_fields.py      # NVMe field descriptions (EN/RU)
 ├── gui/
 │   ├── main_window.py      # Main window, menus, export
@@ -112,7 +123,10 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **2.1.0** | Vendor-specific SMART decoder (7 profiles: SandForce, Kingston, Transcend, Intel, Samsung, SanDisk) |
+| **2.4.x** | Per-vendor attribute name override, SMART-table column-width fix (Stretch), maximized window, false "Wear 100%" guard (Kingston/SM2259) |
+| 2.3.x | Audit & safety batch: fail-closed volume lock, full MBR/GPT protection in all write phases, CLI confirmation + TOCTOU, ScsiStatus checks for USB bridges, profile separation, QD1 baselines, EN docs |
+| 2.2.x | Virtual disks (hypervisor detection), real USB enclosure model via SAT IDENTIFY, OEM NVMe heuristic, new SMART attributes |
+| 2.1.0 | Vendor-specific SMART decoder (8 profiles: SandForce, Kingston, Transcend, Intel, Samsung, SanDisk, Crucial/Micron) |
 | 2.0.0 | CLI mode, baseline comparison, Stress profile (1GB verify, 100GB SLC), extended verify |
 | 1.8.0 | WAF calculation, test history (SQLite), Health Score breakdown, test profiles, JSON export, warm-up+median, P99.9/P99.99, pre-check conditions |
 | 1.7.0 | Health Score penalties, P99.9 latency, JSON export, documentation (4 guides) |
@@ -137,4 +151,4 @@ MIT
 
 ## Authors
 
-Developed by **Serge** (IT Director, [Delivery Auto](https://delivery-auto.com.ua)) with **Claude** (Anthropic AI) 😊
+Developed by **Serg** (IT Director, [Delivery Auto](https://delivery-auto.com.ua)) with **Claudine** (Anthropic AI) 😊

@@ -7,6 +7,8 @@
 
 🇬🇧 [English documentation](README.md)
 
+📖 **[Принцип работы](docs/HOW_IT_WORKS_RU.md)** — подробный разбор алгоритмов и внутреннего устройства · [Руководство пользователя](docs/USER_GUIDE_RU.md) · [Руководство разработчика](docs/DEVELOPER_GUIDE_RU.md)
+
 ---
 
 ## Возможности
@@ -16,12 +18,16 @@
 - **NVMe Health Info** — все 16 стандартных полей (температура, резерв, износ, ошибки и т.д.)
 - **USB-SATA** — SMART через SCSI SAT pass-through
 - **USB-NVMe** — через проприетарные мосты: JMicron JMS583/581, ASMedia ASM2362/2364, Realtek RTL9210/9211/9220
-- **Оценка здоровья (0-100)** — взвешенная формула по SSD Testing Spec
-- **Калькулятор TBW** — использовано/номинально, суточная запись, прогноз ресурса
-- **70+ SMART-атрибутов** — включая Kingston, Samsung, WD, Transcend/Silicon Motion
+- **Оценка здоровья (0-100)** — взвешенная формула с защитами от ложных срабатываний
+- **Калькулятор TBW/WAF** — использовано/оценка, суточная запись, прогноз ресурса
+- **80+ SMART-атрибутов** — включая Kingston, Samsung, WD, Crucial/Micron, Transcend/Silicon Motion
+- **Vendor-профили** — корректное декодирование packed raw (SandForce и др.) + переопределение имён по производителю (напр. ID 202 у Crucial = остаток ресурса, а не Address Mark Errors)
+- **Виртуальные диски** — распознавание гипервизора (VirtIO/Hyper-V/VMware/Xen/Parallels/GCE/AWS), честное «SMART недоступен»
+- **OEM-эвристики** — определение NVMe/SATA за драйверами Intel RST/VMD (bus_type=Unknown)
+- **Реальная модель USB-кармана** — через ATA IDENTIFY поверх SAT (вместо «Mass Storage Device»)
 - **Критические атрибуты** выделены синим цветом
 - **Двуязычные названия** атрибутов — русский и английский
-- **Экспорт SMART** — Файл → Экспорт SMART (Ctrl+S)
+- **Экспорт** — SMART (Ctrl+S), бенчмарк (Ctrl+B), JSON (Ctrl+J)
 
 ### Бенчмарк (7 тестов)
 - **Послед. чтение/запись** — блоки 1 МБ, скорость в МБ/с
@@ -48,9 +54,11 @@
 - **Блокировка томов** — автоматическая перед записью
 
 ### Безопасность
+- **Защита зоны MBR/GPT/EFI** — все тесты записи стартуют за первым 1 ГБ (диск остаётся загружаемым)
+- **Fail-closed блокировка томов** — если хоть один том не заблокирован, запись отменяется
 - **Защита системного диска** — двойное подтверждение с указанием модели
-- **Предупреждения** — все операции записи требуют подтверждения
-- **Модель диска** отображается во всех предупреждениях
+- **CLI: подтверждение по серийнику + TOCTOU-защита** — пересверка диска перед записью (на случай переподключения USB)
+- **Антикомпрессия** — несжимаемые случайные данные на каждой итерации записи (честные цифры на SandForce и др.)
 
 ### Интерфейс
 - **Двуязычный** — Русский / English (меню 🌐 Language)
@@ -91,11 +99,14 @@ disk_diag/
 │   ├── smart_ata.py        # ATA SMART: legacy + ATA PT + SCSI SAT
 │   ├── smart_nvme.py       # NVMe Health: 5 методов fallback + WMI
 │   ├── smart_usb_nvme.py   # USB-NVMe: JMicron/ASMedia/Realtek vendor SCSI
-│   ├── health_assessor.py  # Health Score (0-100), TBW, WAF
-│   ├── benchmark.py        # 7 тестов бенчмарка + мониторинг температуры
+│   ├── drive_enumerator.py # Перечисление дисков + эвристики интерфейса
+│   ├── health_assessor.py  # Health Score (0-100), TBW, WAF, защиты от ложных срабатываний
+│   ├── benchmark.py        # 8 тестов бенчмарка + мониторинг температуры + защита MBR
 │   └── surface_scan.py     # Сканирование поверхности (Ignore/Erase/Refresh/Write)
 ├── data/
-│   ├── smart_db.py         # 70+ SMART-атрибутов (EN/RU)
+│   ├── smart_db.py         # 80+ SMART-атрибутов (EN/RU)
+│   ├── vendor_profiles.py  # Vendor-декодер + переопределение имён
+│   ├── baselines.py        # Эталоны производительности (QD1 vs QD32)
 │   └── nvme_fields.py      # Описания полей NVMe (EN/RU)
 ├── gui/
 │   ├── main_window.py      # Главное окно, меню, экспорт
@@ -112,7 +123,10 @@ disk_diag/
 
 | Версия | Изменения |
 |--------|-----------|
-| **2.1.0** | Vendor-specific SMART decoder (7 профилей: SandForce, Kingston, Transcend, Intel, Samsung, SanDisk) |
+| **2.4.x** | Per-vendor переопределение имён атрибутов, фикс ширины SMART-таблицы (Stretch), окно на весь экран, защита от ложного «Износ 100%» (Kingston/SM2259) |
+| 2.3.x | Аудит и safety-батч: fail-closed volume lock, полная защита MBR/GPT во всех write-фазах, CLI confirmation + TOCTOU, ScsiStatus-проверки USB-мостов, разделение профилей, QD1-baselines, доки EN |
+| 2.2.x | Виртуальные диски (детект гипервизоров), реальная модель USB-кармана через SAT IDENTIFY, NVMe-эвристика OEM, новые SMART-атрибуты |
+| 2.1.0 | Vendor-specific SMART decoder (8 профилей: SandForce, Kingston, Transcend, Intel, Samsung, SanDisk, Crucial/Micron) |
 | 2.0.0 | CLI режим, сравнение с эталонами, Stress профиль (1ГБ verify, 100ГБ SLC), расширенный verify |
 | 1.8.0 | WAF расчёт, история тестов (SQLite), расшифровка Health Score, профили тестов, JSON экспорт, warm-up+медиана, P99.9/P99.99, проверка условий |
 | 1.7.0 | Расшифровка штрафов Health Score, P99.9 латентность, JSON экспорт, документация (4 руководства) |
@@ -137,4 +151,4 @@ MIT
 
 ## Авторы
 
-Разработано **Сержем** (ИТ-директор, [Деливери](https://delivery-auto.com.ua)) совместно с **Клод** (Anthropic AI) 😊
+Разработано **Сержем** (ИТ-директор, [Деливери](https://delivery-auto.com.ua)) совместно с **Клодин** (Anthropic AI) 😊
