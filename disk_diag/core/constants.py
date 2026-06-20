@@ -54,6 +54,7 @@ SMART_READ_LOG = 0xD5
 SMART_ENABLE_OPERATIONS = 0xD8
 
 # SMART log addresses (кладутся в LBA Low при SMART_READ_LOG 0xD5)
+SMART_LOG_ADDR_ERROR = 0x01      # Summary SMART error log (512 байт, до 5 записей)
 SMART_LOG_ADDR_SELF_TEST = 0x06  # SMART self-test log (512 байт, до 21 записи)
 
 # Self-test subcommands (кладутся в LBA Low при SMART_EXECUTE_OFFLINE 0xD4)

@@ -122,6 +122,25 @@ class SelfTestLog:
 
 
 @dataclass
+class ErrorLogEntry:
+    """Одна запись журнала ошибок диска (ATA SMART error log / NVMe error info)."""
+    number: int                 # порядковый номер (ATA) / Error Count (NVMe)
+    description: str             # тип/расшифровка ошибки
+    lba: int = -1               # LBA, на котором произошла ошибка (-1 = нет/не применимо)
+    lifetime_hours: int = -1    # наработка на момент ошибки (ATA; -1 = нет в NVMe)
+    detail: str = ""            # доп. контекст (регистр статуса, NSID, состояние диска)
+
+
+@dataclass
+class ErrorLog:
+    """Журнал ошибок диска + метаданные."""
+    entries: list = field(default_factory=list)  # list[ErrorLogEntry], новейшие первыми
+    total_count: int = 0        # ATA device error count / число записей NVMe
+    supported: bool = True
+    note: str = ""              # пояснение, если supported=False
+
+
+@dataclass
 class HealthStatus:
     level: HealthLevel
     summary: str

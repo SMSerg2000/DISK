@@ -30,6 +30,7 @@ from .health_indicator import HealthIndicator
 from .benchmark_panel import BenchmarkPanel
 from .surface_panel import SurfaceScanPanel
 from .selftest_panel import SelfTestPanel
+from .errorlog_panel import ErrorLogPanel
 
 logger = logging.getLogger(__name__)
 
@@ -219,10 +220,12 @@ class MainWindow(QMainWindow):
         self._benchmark_panel = BenchmarkPanel()
         self._surface_panel = SurfaceScanPanel()
         self._selftest_panel = SelfTestPanel()
+        self._errorlog_panel = ErrorLogPanel()
         self._tabs.addTab(smart_tab, "SMART")
         self._tabs.addTab(self._benchmark_panel, tr("Benchmark", "Тесты"))
         self._tabs.addTab(self._surface_panel, tr("Surface Scan", "Поверхность"))
         self._tabs.addTab(self._selftest_panel, tr("Self-test", "Самотест"))
+        self._tabs.addTab(self._errorlog_panel, tr("Error Log", "Журнал ошибок"))
         main_layout.addWidget(self._tabs, stretch=1)
 
     def _setup_statusbar(self):
@@ -252,6 +255,7 @@ class MainWindow(QMainWindow):
         self._benchmark_panel.clear()
         self._surface_panel.clear()
         self._selftest_panel.clear()
+        self._errorlog_panel.clear()
 
         try:
             self._drives = enumerate_drives()
@@ -284,6 +288,8 @@ class MainWindow(QMainWindow):
         self._selftest_panel.set_drive(drive.drive_number, drive.capacity_bytes,
                                        drive.interface_type.value, drive.model,
                                        drive.serial_number)
+        self._errorlog_panel.set_drive(drive.drive_number,
+                                       drive.interface_type.value, drive.model)
 
         # Виртуальные диски (VirtIO, Hyper-V, VMware, ...) не имеют физического
         # SMART — это абстракция гипервизора над хранилищем. Показываем

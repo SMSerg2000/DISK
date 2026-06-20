@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v2.7.0
+# DISK Diagnostic Tool v3.0.0
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -68,6 +68,12 @@ Destructive (write — opt-in via Standard/Full/Stress profile, **destroys data*
 - **Runs in firmware** — closing the app does not stop a running test (the drive keeps going)
 - **ATA + NVMe + USB-SATA** — direct SATA/NVMe and USB-SATA bridges; USB-NVMe bridges report honestly when unsupported
 
+### Error Log (SMART / NVMe)
+- **Drive error log** — the disk's own record of recent command failures (ATA Summary SMART Error Log / NVMe Error Information Log)
+- **Decoded** — error type (uncorrectable / aborted / interface-CRC / LBA-out-of-range…), failing LBA, power-on hours (ATA), namespace & status code (NVMe)
+- **Read-only & safe** — a single short IOCTL, no writes
+- **ATA + NVMe + USB-SATA** — USB-NVMe bridges report honestly when unsupported
+
 ### Safety
 - **Read-only by default** — the default diagnostic path (SMART, read benchmarks, Ignore scan) never writes to the disk
 - **Raw write operations are destructive** — any benchmark or surface mode that writes to `PhysicalDrive` **overwrites existing data and cannot be undone**
@@ -122,7 +128,8 @@ disk_diag/
 │   ├── health_assessor.py  # Health Score (0-100), TBW, WAF, false-positive guards
 │   ├── benchmark.py        # 8 benchmark tests + temperature monitoring + MBR protection
 │   ├── surface_scan.py     # Surface scan (Ignore/Erase/Refresh/Write)
-│   └── self_test.py        # SMART/NVMe self-test (short/extended, progress, log)
+│   ├── self_test.py        # SMART/NVMe self-test (short/extended, progress, log)
+│   └── error_log.py        # ATA/NVMe error log read + decode
 ├── data/
 │   ├── smart_db.py         # 80+ SMART attributes (EN/RU)
 │   ├── vendor_profiles.py  # Vendor decoder + name override
@@ -133,6 +140,7 @@ disk_diag/
 │   ├── benchmark_panel.py  # 7 cards + 4 chart tabs
 │   ├── surface_panel.py    # Block map + stats + bad sector list
 │   ├── selftest_panel.py   # Self-test launch + progress + history log
+│   ├── errorlog_panel.py   # Drive error log table
 │   └── ...                 # info_panel, smart_table, health_indicator, theme
 ├── i18n.py                 # Localization: tr("en", "ru")
 └── resources/app.ico       # Application icon
@@ -152,7 +160,7 @@ disk_diag/
 - Virtual disks expose no physical SMART data by design.
 - Self-tests run via direct SATA/NVMe and USB-SATA bridges; USB-NVMe bridges generally cannot start one (reported honestly).
 - Trend history compares against the previous snapshot of the **same** disk (by serial); the first reading has no baseline yet.
-- SMART/NVMe error logs are not yet implemented.
+- Error log shows the drive's most recent entries (ATA Summary log: last 5; NVMe: last 32); USB-NVMe bridges generally cannot read it.
 
 ---
 
@@ -160,7 +168,8 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **2.7.0** | SMART **trend history**: per-attribute Δ since last check (Trend column) + degradation alert when defect counters grow (Reallocated/Pending/CRC, NVMe media-errors / spare drop); SQLite snapshots, revived the previously write-only history |
+| **3.0.0** | **Error log** (ATA Summary SMART Error Log / NVMe Error Information Log): decoded error type, failing LBA, power-on hours; read-only. **Completes the diagnostic-depth set** — SMART + trend + self-test + error log |
+| 2.7.0 | SMART **trend history**: per-attribute Δ since last check (Trend column) + degradation alert when defect counters grow (Reallocated/Pending/CRC, NVMe media-errors / spare drop); SQLite snapshots, revived the previously write-only history |
 | 2.6.0 | SMART/NVMe **self-tests**: Short/Extended, live progress, abort, history log (ATA + NVMe + USB-SATA); non-destructive, runs in drive firmware |
 | 2.5.0 | "Honest & Safe": typed confirmation (type serial / `DESTROY PHYSICALDRIVE<N>`) for all GUI write ops, SSD-aware surface-healing warnings, honest safety wording, Known Limitations section, system-disk gate extended to Erase/Refresh, PhysicalDrive scan 32→64 |
 | 2.4.x | Per-vendor attribute name override, SMART-table column-width fix (Stretch), maximized window, false "Wear 100%" guard (Kingston/SM2259) |
