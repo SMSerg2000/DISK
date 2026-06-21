@@ -233,6 +233,8 @@ class SmartTableWidget(QTableWidget):
                     item.setBackground(QBrush(row_color))
 
         self.setSortingEnabled(True)
+        # Сортировка по умолчанию — по названию атрибута (колонка 1, по алфавиту)
+        self.sortItems(1, Qt.SortOrder.AscendingOrder)
         # Настройка ширины колонок — синхронно И отложенно. Отложенный вызов
         # (singleShot 0) выполняется после того как Qt применит финальную
         # геометрию окна: при асинхронном заполнении из worker-потока на

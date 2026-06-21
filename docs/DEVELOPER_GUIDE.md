@@ -756,5 +756,5 @@ Wrap it: `tr("English", "Русский")`. Import: `from ..i18n import tr`.
 
 ---
 
-*DISK Diagnostic Tool v3.0.2 — Developer Guide*
+*DISK Diagnostic Tool v3.0.3 — Developer Guide*
 *Developed by Serg and Claudine (Anthropic AI)*

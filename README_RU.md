@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v3.0.2
+# DISK Diagnostic Tool v3.0.3
 
 <p align="center">
   <b>Утилита диагностики SSD/HDD для Windows — аналог <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -168,7 +168,8 @@ disk_diag/
 
 | Версия | Изменения |
 |--------|-----------|
-| **3.0.2** | Фикс: ATA self-test/error-log на драйверах, отвергающих `SMART READ LOG` через legacy SMART IOCTL (error 122 INSUFFICIENT_BUFFER) — чтение логов и EXECUTE OFFLINE теперь с fallback на ATA Pass-Through / SCSI SAT |
+| **3.0.3** | Таблица SMART теперь по умолчанию сортируется по названию атрибута (А→Я) |
+| 3.0.2 | Фикс: ATA self-test/error-log на драйверах, отвергающих `SMART READ LOG` через legacy SMART IOCTL (error 122 INSUFFICIENT_BUFFER) — чтение логов и EXECUTE OFFLINE теперь с fallback на ATA Pass-Through / SCSI SAT |
 | 3.0.1 | Фикс: чтение NVMe self-test/error-log теперь через `IOCTL_STORAGE_QUERY_PROPERTY` (как health), с `STORAGE_PROTOCOL_COMMAND` как fallback — драйверы, отвергающие последний (StorNVMe/RAID/VMD, error 87), теперь читают журналы. **Запуск** NVMe self-test всё ещё требует protocol command — сообщается честно |
 | 3.0.0 | **Журнал ошибок** (ATA Summary SMART Error Log / NVMe Error Information Log): расшифровка типа ошибки, LBA сбоя, наработка; только чтение. **Завершён набор диагностической глубины** — SMART + тренд + самотест + журнал ошибок |
 | 2.7.0 | SMART **trend-история**: подельтовое изменение каждого атрибута с прошлой проверки (колонка «Тренд» ↑/↓) + баннер деградации при росте дефектных счётчиков (Reallocated/Pending/CRC, NVMe media-errors / падение spare); снимки в SQLite, оживлена ранее write-only история |

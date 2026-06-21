@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v3.0.2
+# DISK Diagnostic Tool v3.0.3
 
 <p align="center">
   <b>Windows SSD/HDD diagnostic utility inspired by <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -168,7 +168,8 @@ disk_diag/
 
 | Version | Changes |
 |---------|---------|
-| **3.0.2** | Fix: ATA self-test/error-log on drivers that reject `SMART READ LOG` via the legacy SMART IOCTL (error 122 INSUFFICIENT_BUFFER) — log reads and EXECUTE OFFLINE now fall back to ATA Pass-Through / SCSI SAT |
+| **3.0.3** | SMART table now sorts by attribute name (A→Z) by default |
+| 3.0.2 | Fix: ATA self-test/error-log on drivers that reject `SMART READ LOG` via the legacy SMART IOCTL (error 122 INSUFFICIENT_BUFFER) — log reads and EXECUTE OFFLINE now fall back to ATA Pass-Through / SCSI SAT |
 | 3.0.1 | Fix: NVMe self-test/error-log reads now use `IOCTL_STORAGE_QUERY_PROPERTY` (like health), with `STORAGE_PROTOCOL_COMMAND` as fallback — drivers that reject the latter (StorNVMe/RAID/VMD, error 87) can now read the logs. NVMe self-test **start** still needs the protocol command and says so clearly |
 | 3.0.0 | **Error log** (ATA Summary SMART Error Log / NVMe Error Information Log): decoded error type, failing LBA, power-on hours; read-only. **Completes the diagnostic-depth set** — SMART + trend + self-test + error log |
 | 2.7.0 | SMART **trend history**: per-attribute Δ since last check (Trend column) + degradation alert when defect counters grow (Reallocated/Pending/CRC, NVMe media-errors / spare drop); SQLite snapshots, revived the previously write-only history |
