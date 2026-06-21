@@ -103,13 +103,23 @@ def _ata_sat_send(handle, feature, lba_low, data_in):
 
 
 def _ata_send_offline(handle, subcommand, use_sat):
-    """SMART EXECUTE OFFLINE IMMEDIATE — запустить/прервать self-test (non-data)."""
+    """SMART EXECUTE OFFLINE IMMEDIATE — запустить/прервать self-test (non-data).
+
+    SATA: legacy SMART IOCTL, при отказе → ATA Pass-Through / SCSI SAT (часть
+    драйверов не пускает EXECUTE OFFLINE через legacy SMART IOCTL, как и READ LOG).
+    """
     if use_sat:
         _ata_sat_send(handle, SMART_EXECUTE_OFFLINE, subcommand, data_in=False)
-    else:
+        return
+    try:
         cmd = smart_ata._build_smart_command(
             SMART_EXECUTE_OFFLINE, buffer_size=0, lba_low=subcommand)
         handle.ioctl(SMART_SEND_DRIVE_COMMAND, cmd, ctypes.sizeof(SENDCMDOUTPARAMS))
+    except (IoctlFailed, DiskAccessError) as e_legacy:
+        try:
+            _ata_sat_send(handle, SMART_EXECUTE_OFFLINE, subcommand, data_in=False)
+        except (IoctlFailed, DiskAccessError):
+            raise e_legacy
 
 
 def _ata_read_smart_data(handle, use_sat):
@@ -137,16 +147,31 @@ def _ata_read_progress(handle, use_sat):
     return (False, -1)
 
 
-def _ata_read_selftest_log_raw(handle, use_sat):
-    """Прочитать 512-байтный SMART self-test log (READ LOG 0xD5 @ log 0x06)."""
+def _ata_read_log(handle, log_addr, use_sat):
+    """Прочитать 512-байтный ATA log (READ LOG 0xD5 @ log_addr).
+
+    USB → SAT. SATA → legacy SMART IOCTL, при отказе → ATA Pass-Through / SCSI SAT:
+    часть драйверов не пускает READ LOG через legacy SMART IOCTL (error 122
+    INSUFFICIENT_BUFFER), хотя обычные атрибуты 0xD0 через него читаются.
+    """
     if use_sat:
-        return _ata_sat_send(handle, SMART_READ_LOG, SMART_LOG_ADDR_SELF_TEST,
-                             data_in=True)
-    cmd = smart_ata._build_smart_command(
-        SMART_READ_LOG, buffer_size=512, lba_low=SMART_LOG_ADDR_SELF_TEST)
-    out = handle.ioctl(SMART_RCV_DRIVE_DATA, cmd, ctypes.sizeof(SENDCMDOUTPARAMS))
-    off = SENDCMDOUTPARAMS.bBuffer.offset
-    return out[off:off + 512]
+        return _ata_sat_send(handle, SMART_READ_LOG, log_addr, data_in=True)
+    try:
+        cmd = smart_ata._build_smart_command(
+            SMART_READ_LOG, buffer_size=512, lba_low=log_addr)
+        out = handle.ioctl(SMART_RCV_DRIVE_DATA, cmd, ctypes.sizeof(SENDCMDOUTPARAMS))
+        off = SENDCMDOUTPARAMS.bBuffer.offset
+        return out[off:off + 512]
+    except (IoctlFailed, DiskAccessError) as e_legacy:
+        try:
+            return _ata_sat_send(handle, SMART_READ_LOG, log_addr, data_in=True)
+        except (IoctlFailed, DiskAccessError):
+            raise e_legacy
+
+
+def _ata_read_selftest_log_raw(handle, use_sat):
+    """SMART self-test log (READ LOG 0xD5 @ log 0x06) с fallback на ATA PT/SAT."""
+    return _ata_read_log(handle, SMART_LOG_ADDR_SELF_TEST, use_sat)
 
 
 def _parse_ata_selftest_log(data: bytes) -> list:

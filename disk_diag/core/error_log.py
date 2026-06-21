@@ -22,8 +22,7 @@ from .constants import (
 from .structures import SENDCMDOUTPARAMS
 from .winapi import DeviceHandle, IoctlFailed, DiskAccessError
 from .models import ErrorLogEntry, ErrorLog, InterfaceType
-from . import smart_ata
-from .self_test import _ata_sat_send, _nvme_get_log
+from .self_test import _ata_read_log, _nvme_get_log
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +59,8 @@ _NVME_ERR_ENTRIES = 32
 # ============================================================
 
 def _ata_read_error_log_raw(handle, use_sat):
-    """Прочитать 512-байтный Summary SMART Error Log (READ LOG 0xD5 @ 0x01)."""
-    if use_sat:
-        return _ata_sat_send(handle, SMART_READ_LOG, SMART_LOG_ADDR_ERROR,
-                             data_in=True)
-    cmd = smart_ata._build_smart_command(
-        SMART_READ_LOG, buffer_size=512, lba_low=SMART_LOG_ADDR_ERROR)
-    out = handle.ioctl(SMART_RCV_DRIVE_DATA, cmd, ctypes.sizeof(SENDCMDOUTPARAMS))
-    off = SENDCMDOUTPARAMS.bBuffer.offset
-    return out[off:off + 512]
+    """Summary SMART Error Log (READ LOG 0xD5 @ 0x01) с fallback на ATA PT/SAT."""
+    return _ata_read_log(handle, SMART_LOG_ADDR_ERROR, use_sat)
 
 
 def _decode_ata_error_reg(reg: int) -> str:
