@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v3.0.0
+# DISK Diagnostic Tool v3.0.1
 
 <p align="center">
   <b>Утилита диагностики SSD/HDD для Windows — аналог <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -168,7 +168,8 @@ disk_diag/
 
 | Версия | Изменения |
 |--------|-----------|
-| **3.0.0** | **Журнал ошибок** (ATA Summary SMART Error Log / NVMe Error Information Log): расшифровка типа ошибки, LBA сбоя, наработка; только чтение. **Завершён набор диагностической глубины** — SMART + тренд + самотест + журнал ошибок |
+| **3.0.1** | Фикс: чтение NVMe self-test/error-log теперь через `IOCTL_STORAGE_QUERY_PROPERTY` (как health), с `STORAGE_PROTOCOL_COMMAND` как fallback — драйверы, отвергающие последний (StorNVMe/RAID/VMD, error 87), теперь читают журналы. **Запуск** NVMe self-test всё ещё требует protocol command (на таких драйверах недоступен) — сообщается честно |
+| 3.0.0 | **Журнал ошибок** (ATA Summary SMART Error Log / NVMe Error Information Log): расшифровка типа ошибки, LBA сбоя, наработка; только чтение. **Завершён набор диагностической глубины** — SMART + тренд + самотест + журнал ошибок |
 | 2.7.0 | SMART **trend-история**: подельтовое изменение каждого атрибута с прошлой проверки (колонка «Тренд» ↑/↓) + баннер деградации при росте дефектных счётчиков (Reallocated/Pending/CRC, NVMe media-errors / падение spare); снимки в SQLite, оживлена ранее write-only история |
 | 2.6.0 | SMART/NVMe **самотесты**: Короткий/Расширенный, прогресс в реальном времени, прерывание, журнал истории (ATA + NVMe + USB-SATA); non-destructive, идёт в firmware диска |
 | 2.5.0 | «Honest & Safe»: typed-подтверждение (ввод серийника / `DESTROY PHYSICALDRIVE<N>`) для всех операций записи в GUI, SSD-предупреждения для surface-лечения, честный safety-текст, раздел «Известные ограничения», защита системного диска распространена на Erase/Refresh, перебор PhysicalDrive 32→64 |

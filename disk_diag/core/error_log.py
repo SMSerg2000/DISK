@@ -23,7 +23,7 @@ from .structures import SENDCMDOUTPARAMS
 from .winapi import DeviceHandle, IoctlFailed, DiskAccessError
 from .models import ErrorLogEntry, ErrorLog, InterfaceType
 from . import smart_ata
-from .self_test import _ata_sat_send, _nvme_protocol_command
+from .self_test import _ata_sat_send, _nvme_get_log
 
 logger = logging.getLogger(__name__)
 
@@ -128,11 +128,8 @@ def _nvme_read_error_log_raw(handle):
     """
     last_err = None
     for count in (_NVME_ERR_ENTRIES, 1):
-        data_size = count * 64
-        numd = (data_size // 4) - 1
-        cdw10 = (numd << 16) | NVME_LOG_PAGE_ERROR_INFO
         try:
-            return _nvme_protocol_command(handle, 0x02, cdw10, data_size)
+            return _nvme_get_log(handle, NVME_LOG_PAGE_ERROR_INFO, count * 64)
         except (IoctlFailed, DiskAccessError) as e:
             last_err = e
     raise last_err

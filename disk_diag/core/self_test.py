@@ -33,6 +33,8 @@ from .constants import (
     ProtocolTypeNvme, NVME_LOG_PAGE_SELF_TEST, NVME_ADMIN_DEVICE_SELF_TEST,
     NVME_SELFTEST_SHORT, NVME_SELFTEST_EXTENDED, NVME_SELFTEST_ABORT,
     IOCTL_STORAGE_PROTOCOL_COMMAND,
+    IOCTL_STORAGE_QUERY_PROPERTY, StorageDeviceProtocolSpecificProperty,
+    PropertyStandardQuery, NVMeDataTypeLogPage,
 )
 from .structures import SENDCMDOUTPARAMS
 from .winapi import DeviceHandle, IoctlFailed, DiskAccessError
@@ -232,17 +234,70 @@ def _nvme_protocol_command(handle, opcode, cdw10, data_size, nsid=0xFFFFFFFF):
     return b""
 
 
+def _nvme_get_log_query(handle, lid, log_size):
+    """Прочитать NVMe log page через IOCTL_STORAGE_QUERY_PROPERTY.
+
+    Тот же механизм, что и для health — работает на драйверах, которые отвергают
+    IOCTL_STORAGE_PROTOCOL_COMMAND с error 87 (Microsoft StorNVMe / RAID / VMD).
+    Только для ЧТЕНИЯ логов. Перебираем размер STORAGE_PROTOCOL_SPECIFIC_DATA
+    (по версии Windows: 40/44/28 байт).
+    """
+    HEADER = 8  # STORAGE_PROPERTY_QUERY: PropertyId(4) + QueryType(4)
+    last_err = None
+    for proto_size in (40, 44, 28):
+        buf = bytearray(HEADER + proto_size + log_size)
+        struct.pack_into("<I", buf, 0, StorageDeviceProtocolSpecificProperty)
+        struct.pack_into("<I", buf, 4, PropertyStandardQuery)
+        # STORAGE_PROTOCOL_SPECIFIC_DATA @ HEADER
+        struct.pack_into("<I", buf, HEADER + 0, ProtocolTypeNvme)
+        struct.pack_into("<I", buf, HEADER + 4, NVMeDataTypeLogPage)
+        struct.pack_into("<I", buf, HEADER + 8, lid)          # ProtocolDataRequestValue = LID
+        struct.pack_into("<I", buf, HEADER + 12, 0)           # SubValue
+        struct.pack_into("<I", buf, HEADER + 16, proto_size)  # ProtocolDataOffset
+        struct.pack_into("<I", buf, HEADER + 20, log_size)    # ProtocolDataLength
+        try:
+            handle.ioctl_inplace(IOCTL_STORAGE_QUERY_PROPERTY, buf)
+        except (IoctlFailed, DiskAccessError) as e:
+            last_err = e
+            continue
+        resp_off = struct.unpack_from("<I", buf, HEADER + 16)[0]
+        resp_len = struct.unpack_from("<I", buf, HEADER + 20)[0]
+        if resp_len == 0 or resp_len > log_size + 64:
+            last_err = IoctlFailed("NVMe GetLog QueryProperty", 0,
+                                   f"bad ProtocolDataLength={resp_len} (proto={proto_size})")
+            continue
+        start = HEADER + resp_off
+        end = min(start + resp_len, len(buf))
+        return bytes(buf[start:end])
+    raise last_err or IoctlFailed("NVMe GetLog QueryProperty", 0, "no proto size worked")
+
+
+def _nvme_get_log(handle, lid, log_size):
+    """Прочитать NVMe log page: сначала QueryProperty (совместимее), при отказе —
+    ProtocolCommand. Возвращает raw-байты лога."""
+    try:
+        return _nvme_get_log_query(handle, lid, log_size)
+    except (IoctlFailed, DiskAccessError) as e_query:
+        try:
+            numd = (log_size // 4) - 1
+            cdw10 = (numd << 16) | lid
+            return _nvme_protocol_command(handle, 0x02, cdw10, log_size)
+        except (IoctlFailed, DiskAccessError):
+            raise e_query  # исходная (QueryProperty) ошибка информативнее
+
+
 def _nvme_start_self_test(handle, stc):
-    """Запустить/прервать NVMe Device Self-test (Admin 0x14, STC в CDW10)."""
+    """Запустить/прервать NVMe Device Self-test (Admin 0x14, STC в CDW10).
+
+    SET-команда — только через ProtocolCommand (QueryProperty умеет лишь чтение).
+    На драйверах без поддержки STORAGE_PROTOCOL_COMMAND запуск недоступен.
+    """
     _nvme_protocol_command(handle, NVME_ADMIN_DEVICE_SELF_TEST, stc, data_size=0)
 
 
 def _nvme_read_selftest_log_raw(handle):
-    """Get Log Page 0x06 (Device Self-test log, 564 байта)."""
-    data_size = 564
-    numd = (data_size // 4) - 1  # 141 dwords → NUMD = 140
-    cdw10 = (numd << 16) | NVME_LOG_PAGE_SELF_TEST
-    return _nvme_protocol_command(handle, 0x02, cdw10, data_size=data_size)
+    """Get Log Page 0x06 (Device Self-test log, 564 байта) — через QueryProperty."""
+    return _nvme_get_log(handle, NVME_LOG_PAGE_SELF_TEST, 564)
 
 
 def _parse_nvme_selftest_log(data: bytes):
@@ -321,7 +376,19 @@ class SelfTestEngine:
             if self._is_nvme:
                 stc = (NVME_SELFTEST_SHORT if test_type == SelfTestType.SHORT
                        else NVME_SELFTEST_EXTENDED)
-                _nvme_start_self_test(h, stc)
+                try:
+                    _nvme_start_self_test(h, stc)
+                except (IoctlFailed, DiskAccessError) as e:
+                    # Запуск — единственная SET-команда; она требует
+                    # STORAGE_PROTOCOL_COMMAND. Если драйвер его не пускает
+                    # (Microsoft StorNVMe / RAID / VMD, error 87), запуск
+                    # невозможен — но ЧТЕНИЕ журнала/прогресса работает через
+                    # QueryProperty. Сообщаем человеку понятно.
+                    raise IoctlFailed(
+                        "NVMe self-test start", 0,
+                        "this driver does not allow starting an NVMe self-test "
+                        "(STORAGE_PROTOCOL_COMMAND unavailable). Reading the "
+                        f"self-test/error logs still works. [{e}]") from e
             else:
                 sub = (SMART_SELFTEST_SHORT if test_type == SelfTestType.SHORT
                        else SMART_SELFTEST_EXTENDED)

@@ -1,6 +1,6 @@
 # DISK Diagnostic Tool — How It Works
 
-> A detailed technical breakdown of the algorithms and internals (version 3.0.0).
+> A detailed technical breakdown of the algorithms and internals (version 3.0.1).
 > This document explains **how** the program works and **why** each engineering decision was made.
 > For a feature overview see [README.md](../README.md); for usage see [USER_GUIDE.md](USER_GUIDE.md).
 
@@ -540,5 +540,5 @@ These principles recur across all subsystems and define the program's "character
 
 ---
 
-*DISK Diagnostic Tool v3.0.0 — How It Works.*
+*DISK Diagnostic Tool v3.0.1 — How It Works.*
 *Developed by Serg and Claudine (Anthropic AI).*
