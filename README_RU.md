@@ -1,4 +1,4 @@
-# DISK Diagnostic Tool v3.0.3
+# DISK Diagnostic Tool v3.0.4
 
 <p align="center">
   <b>Утилита диагностики SSD/HDD для Windows — аналог <a href="https://hdd.by/victoria/">Victoria HDD</a></b><br>
@@ -168,7 +168,8 @@ disk_diag/
 
 | Версия | Изменения |
 |--------|-----------|
-| **3.0.3** | Таблица SMART теперь по умолчанию сортируется по названию атрибута (А→Я) |
+| **3.0.4** | Новые диски (< 24 ч наработки): прогноз ресурса теперь показывает «рано оценивать» вместо пустой строки — запись за первые часы (завод + установка ОС) исказила бы экстраполяцию |
+| 3.0.3 | Таблица SMART теперь по умолчанию сортируется по названию атрибута (А→Я) |
 | 3.0.2 | Фикс: ATA self-test/error-log на драйверах, отвергающих `SMART READ LOG` через legacy SMART IOCTL (error 122 INSUFFICIENT_BUFFER) — чтение логов и EXECUTE OFFLINE теперь с fallback на ATA Pass-Through / SCSI SAT |
 | 3.0.1 | Фикс: чтение NVMe self-test/error-log теперь через `IOCTL_STORAGE_QUERY_PROPERTY` (как health), с `STORAGE_PROTOCOL_COMMAND` как fallback — драйверы, отвергающие последний (StorNVMe/RAID/VMD, error 87), теперь читают журналы. **Запуск** NVMe self-test всё ещё требует protocol command — сообщается честно |
 | 3.0.0 | **Журнал ошибок** (ATA Summary SMART Error Log / NVMe Error Information Log): расшифровка типа ошибки, LBA сбоя, наработка; только чтение. **Завершён набор диагностической глубины** — SMART + тренд + самотест + журнал ошибок |

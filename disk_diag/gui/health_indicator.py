@@ -105,6 +105,10 @@ class HealthIndicator(QFrame):
                     extra_lines.append(f"{lbl}: ~{years:.1f} {tr('years', 'лет')}")
                 else:
                     extra_lines.append(f"{lbl}: ~{status.tbw_remaining_days} {tr('days', 'дней')}")
+            elif status.tbw_remaining_days == -2:
+                extra_lines.append(
+                    f"{tr('Forecast', 'Прогноз')}: "
+                    f"{tr('too early (new drive)', 'рано — диск новый (< 24 ч)')}")
             if status.waf > 0:
                 waf_status = tr("normal", "норма") if status.waf <= 3 else (
                     tr("elevated", "повышен") if status.waf <= 5 else tr("high!", "высокий!"))

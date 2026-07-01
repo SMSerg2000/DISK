@@ -180,6 +180,9 @@ def _ata_tbw(attributes: list[SmartAttribute], capacity_bytes: int = 0, profile=
             # (~110 лет) гарантированно триггерит "> 100 лет" в GUI.
             remaining_days = min(int(remaining_tb / daily_write_tb),
                                  _REMAINING_DAYS_CAP)
+    elif consumed_tb > 0 and 0 <= power_on_hours <= 24 and rated_tb > 0:
+        # Диск слишком новый (< суток наработки) — прогноз пока недостоверен.
+        remaining_days = -2  # → GUI покажет «рано оценивать»
 
     # WAF = NAND Writes / Host Writes
     waf = -1.0
@@ -397,6 +400,11 @@ def _nvme_tbw_and_waf(info: NvmeHealthInfo, capacity_bytes: int = 0):
             remaining_tb = max(0, rated_tb - consumed_tb)
             remaining_days = min(int(remaining_tb / daily_write_tb),
                                  _REMAINING_DAYS_CAP)
+    elif consumed_tb > 0 and 0 <= info.power_on_hours <= 24 and rated_tb > 0:
+        # Диск слишком новый: запись за первые часы (заводское тестирование +
+        # установка ОС) не отражает типичную нагрузку — экстраполяция дала бы
+        # ложно-пессимистичный прогноз. Сигнал -2 → GUI покажет «рано оценивать».
+        remaining_days = -2
 
     # WAF — нужны данные о NAND writes (NVMe стандарт не включает их,
     # но percentage_used даёт косвенную оценку)

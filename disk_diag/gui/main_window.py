@@ -767,6 +767,9 @@ class MainWindow(QMainWindow):
                     lines.append(f"{lbl}:    > 100 {tr('years', 'лет')}")
                 else:
                     lines.append(f"{lbl}:    ~{years:.1f} {tr('years', 'лет')} ({s.tbw_remaining_days} {tr('days', 'дней')})")
+            elif s.tbw_remaining_days == -2:
+                lbl = tr("Forecast", "Прогноз")
+                lines.append(f"{lbl}:    {tr('too early to estimate — new drive (< 24h uptime)', 'рано оценивать — диск новый (< 24 ч наработки)')}")
             if s.daily_write_tb > 0:
                 lines.append(f"{tr('Write/day', 'Запись/день')}: {s.daily_write_tb * 1024:.1f} GB/{tr('day', 'день')}")
             if s.waf > 0:
